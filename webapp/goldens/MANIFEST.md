@@ -31,3 +31,17 @@ Apple C-series differential goldens (`apple/`):
 - Regenerate after any apple-parser change:
   `python3 tools/generate_apple_goldens.py --corpus-dir /home/henrik/apps/qualcomm-hwcombos-mbn-parser --out webapp/goldens`
   (uses the fixed reference in `apple-c-modem-parser/apple_parser_fix`).
+
+MTK DRDI differential goldens (`mtk/`):
+
+- `mtk/manifest.json` — per-image digest + per-card counts (committed; small).
+  Written only with `--manifest`; a plain regen leaves it untouched.
+- `mtk/tables.json` / `mtk/diag.json` — the `generateMtkTables` viewer-table
+  projection and the reference's per-card export texts (b0cd/b826/mtk_nr/mtk_lte
+  via `export_selected_formats`) for every card of both sample images. Oversized
+  reference dumps — excluded from git, tests skip without them.
+- Regenerate after any MTK-reference or row-schema change:
+  `python3 tools/generate_mtk_goldens.py --corpus-dir /home/henrik/apps/qualcomm-hwcombos-mbn-parser --out webapp/goldens`
+  (sys.path-inserts `mtk-drdi-combo-parser`; the row schema lives in the
+  generator's `build_tables` and must change together with
+  `webapp/js/lib/mtk_tables.js`).

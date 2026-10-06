@@ -13,10 +13,25 @@ import {
   decodeExportBytes,
 } from "../js/exportplan.js";
 
-test("EXPORT_FORMATS lists the six export formats in canonical order", () => {
+test("EXPORT_FORMATS lists the eight export formats in canonical order", () => {
   // gui_version/main.py:84-90 order is mbn, json, csv, b0cd, b826; the webapp
-  // inserts its extra "webcsv" slot after csv.
-  assert.deepEqual(EXPORT_FORMATS, ["mbn", "json", "csv", "webcsv", "b0cd", "b826"]);
+  // inserts its extra "webcsv" slot after csv and the MTK DRDI trace formats
+  // at the end.
+  assert.deepEqual(EXPORT_FORMATS, ["mbn", "json", "csv", "webcsv", "b0cd", "b826", "mtk_nr", "mtk_lte"]);
+});
+
+test("buildExportJobs skips the MTK-only trace formats for non-MTK cards", () => {
+  const mtk = { key: "m", record: { mtk: { bankIndex: 6, profile: 0 } } };
+  const qcom = { key: "q", record: { name: "rf_config.mbn" } };
+  const jobs = buildExportJobs([mtk, qcom], ["mtk_nr", "mtk_lte", "json"]);
+  // json jobs run for both families; the trace formats only plan MTK cards.
+  assert.deepEqual(jobs, [
+    { card: mtk, format: "json" },
+    { card: mtk, format: "mtk_nr" },
+    { card: mtk, format: "mtk_lte" },
+    { card: qcom, format: "json" },
+  ]);
+  assert.deepEqual(buildExportJobs([qcom], ["mtk_nr", "mtk_lte"]), []);
 });
 
 test("buildExportJobs pairs every ticked card with every enabled format", () => {

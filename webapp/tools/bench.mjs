@@ -30,6 +30,10 @@ import {
 } from "../js/lib/analyzer.js";
 import { extractContainer, discoverCandidates } from "../js/lib/extractor.js";
 import { requireValidBank, generateAppleTables } from "../js/lib/apple_cr.js";
+import { unwrapBytes } from "../js/lib/mtk_containers.js";
+import { decodeMtkSummary, mtkCardCombos } from "../js/lib/mtk_scan.js";
+import { generateMtkTables } from "../js/lib/mtk_tables.js";
+import { Reporter } from "../js/lib/mtk_universal.js";
 import { sha256HexAsync } from "../js/lib/hash.js";
 
 // Wraps a RandomAccessSource and records read counts/bytes plus a coarse size
@@ -112,7 +116,7 @@ export async function bench(inputPath, { quiet = false, onPhase } = {}) {
   }
 
   const needsContainer = records.some(
-    (r) => !r.apple && r.external && r.inner_path !== r.name && !fat,
+    (r) => !r.apple && !r.mtk && r.external && r.inner_path !== r.name && !fat,
   );
   let containerBlobs = null;
   if (needsContainer) {
@@ -128,6 +132,19 @@ export async function bench(inputPath, { quiet = false, onPhase } = {}) {
     metrics.phases.extractContainer = counter.summary();
   }
 
+  // MTK DRDI records: one unwrap+decode serves every card of the source (the
+  // worker memoizes this image state; here it is hoisted out of the record
+  // loop for the same reason). Timed separately from the per-record parse.
+  let mtkSummary = null;
+  if (records.some((r) => r.mtk)) {
+    const counter = new CountingSource(inner);
+    const start = performance.now();
+    const parts = await unwrapBytes(await counter.read(0, counter.size), name);
+    mtkSummary = await decodeMtkSummary(parts, new Reporter());
+    metrics.mtkDecodeMs = round(performance.now() - start);
+    metrics.phases.mtkDecode = counter.summary();
+  }
+
   const parseCounter = new CountingSource(inner);
   const recordSnapshots = [];
   let parseMsTotal = 0;
@@ -135,10 +152,15 @@ export async function bench(inputPath, { quiet = false, onPhase } = {}) {
   for (const record of records) {
     let parsed;
     try {
-      const blob = await resolveBlob(parseCounter, fat, containerBlobs, record);
-      if (!blob) throw new Error("blob unresolved");
       const p0 = performance.now();
-      parsed = parseModule(record, blob);
+      if (record.mtk) {
+        // No blob resolution: mtkCardCombos reads the memoized image state.
+        parsed = mtkCardCombos(mtkSummary, record.mtk.bankIndex, record.mtk.profile);
+      } else {
+        const blob = await resolveBlob(parseCounter, fat, containerBlobs, record);
+        if (!blob) throw new Error("blob unresolved");
+        parsed = parseModule(record, blob);
+      }
       parseMsTotal += performance.now() - p0;
       if (record.apple) requireValidBank(parsed);
     } catch (err) {
@@ -147,7 +169,11 @@ export async function bench(inputPath, { quiet = false, onPhase } = {}) {
     }
     try {
       const t1 = performance.now();
-      const tables = record.apple ? generateAppleTables(parsed) : generateWebTables(parsed.combinations, parsed.components);
+      const tables = record.apple
+        ? generateAppleTables(parsed)
+        : record.mtk
+          ? generateMtkTables(parsed.combos, parsed.lteCombos)
+          : generateWebTables(parsed.combinations, parsed.components);
       const text = JSON.stringify(tables);
       tableMsTotal += performance.now() - t1;
       recordSnapshots.push({

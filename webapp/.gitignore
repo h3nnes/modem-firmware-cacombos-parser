@@ -1,6 +1,8 @@
 !package.json
 !goldens/**/*.json
 # Oversized reference dumps (GitHub 100 MB hard limit) — local only; the
-# apple differential tests skip when they are absent.
+# apple/mtk differential tests skip when they are absent.
 goldens/apple/tables.json
 goldens/apple/diag.json
+goldens/mtk/tables.json
+goldens/mtk/diag.json

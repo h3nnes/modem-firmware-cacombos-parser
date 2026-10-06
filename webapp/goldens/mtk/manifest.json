@@ -1,0 +1,136 @@
+{
+  "regen": "python3 tools/generate_mtk_goldens.py --corpus-dir <corpus> --out webapp/goldens --manifest",
+  "python": "3.14.4",
+  "images": {
+    "Oppo_Find_X10_Pro_Max_5G_PMX110-modem": {
+      "file": "Oppo_Find_X10_Pro_Max_5G_PMX110-modem.img",
+      "size": 136598352,
+      "sha256": "fee0eddca99c5d364fd39575150b6a95f0db664f28b9a8e9861a0f4388a2f726",
+      "loader": "grid",
+      "capability_bank_index": 6,
+      "cards": {
+        "Oppo_Find_X10_Pro_Max_5G_PMX110-modem/bank6/profile0": {
+          "counts": {
+            "endc": 105,
+            "nrca": 136,
+            "nrdc": 0,
+            "lte": 267
+          },
+          "rows": {
+            "lte_ca": 267,
+            "nr_ca": 136,
+            "endc": 105,
+            "nrdc": 0
+          }
+        },
+        "Oppo_Find_X10_Pro_Max_5G_PMX110-modem/bank6/profile1": {
+          "counts": {
+            "endc": 105,
+            "nrca": 139,
+            "nrdc": 0,
+            "lte": 267
+          },
+          "rows": {
+            "lte_ca": 267,
+            "nr_ca": 139,
+            "endc": 105,
+            "nrdc": 0
+          }
+        },
+        "Oppo_Find_X10_Pro_Max_5G_PMX110-modem/bank6/profile2": {
+          "counts": {
+            "endc": 105,
+            "nrca": 139,
+            "nrdc": 0,
+            "lte": 267
+          },
+          "rows": {
+            "lte_ca": 267,
+            "nr_ca": 139,
+            "endc": 105,
+            "nrdc": 0
+          }
+        }
+      }
+    },
+    "mtk_pocox8pro_d8500u_modem": {
+      "file": "mtk_pocox8pro_d8500u_modem.img",
+      "size": 99524608,
+      "sha256": "b1eb38c87972ceedd80b5ed7d2a11785ba496189351fa09cc8209b793e7fe859",
+      "loader": "grid",
+      "capability_bank_index": 6,
+      "cards": {
+        "mtk_pocox8pro_d8500u_modem/bank6/profile0": {
+          "counts": {
+            "endc": 0,
+            "nrca": 144,
+            "nrdc": 0,
+            "lte": 135
+          },
+          "rows": {
+            "lte_ca": 135,
+            "nr_ca": 144,
+            "endc": 0,
+            "nrdc": 0
+          }
+        },
+        "mtk_pocox8pro_d8500u_modem/bank6/profile1": {
+          "counts": {
+            "endc": 67,
+            "nrca": 137,
+            "nrdc": 0,
+            "lte": 123
+          },
+          "rows": {
+            "lte_ca": 123,
+            "nr_ca": 137,
+            "endc": 67,
+            "nrdc": 0
+          }
+        },
+        "mtk_pocox8pro_d8500u_modem/bank6/profile2": {
+          "counts": {
+            "endc": 181,
+            "nrca": 170,
+            "nrdc": 0,
+            "lte": 384
+          },
+          "rows": {
+            "lte_ca": 384,
+            "nr_ca": 170,
+            "endc": 181,
+            "nrdc": 0
+          }
+        },
+        "mtk_pocox8pro_d8500u_modem/bank6/profile3": {
+          "counts": {
+            "endc": 0,
+            "nrca": 146,
+            "nrdc": 0,
+            "lte": 383
+          },
+          "rows": {
+            "lte_ca": 383,
+            "nr_ca": 146,
+            "endc": 0,
+            "nrdc": 0
+          }
+        },
+        "mtk_pocox8pro_d8500u_modem/bank6/profile4": {
+          "counts": {
+            "endc": 339,
+            "nrca": 170,
+            "nrdc": 0,
+            "lte": 10
+          },
+          "rows": {
+            "lte_ca": 10,
+            "nr_ca": 170,
+            "endc": 339,
+            "nrdc": 0
+          }
+        }
+      }
+    }
+  }
+}

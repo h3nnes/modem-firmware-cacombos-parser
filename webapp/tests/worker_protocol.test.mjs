@@ -13,7 +13,10 @@
 // container, because a parseable card requires corpus data.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { CORPUS_DIR, corpusAvailable } from "./helpers.mjs";
+import { isValidTablesShape } from "../js/cardcache.js";
 
 // --- synthetic tar (extractTar ignores the checksum field) ---------------------
 
@@ -75,15 +78,16 @@ globalThis.self = {
 
 const workerModule = await import(new URL("../js/worker.js", import.meta.url).href);
 
-function waitFor(predicate, start = 0) {
+function waitFor(predicate, start = 0, timeout = 5000) {
   // Only consider messages posted at/after `start`: several tests post replies
   // with the same shape (e.g. records with fileIndex 0), and an unscoped scan
-  // would match an earlier test's reply.
+  // would match an earlier test's reply. The timeout is a parameter because an
+  // MTK image scan legitimately takes longer than 5s (unwrap + full decode).
   for (let i = start; i < posted.length; i++) {
     if (predicate(posted[i])) return Promise.resolve(posted[i]);
   }
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timed out waiting for a worker reply")), 5000);
+    const timer = setTimeout(() => reject(new Error("timed out waiting for a worker reply")), timeout);
     waiters.push({
       predicate,
       resolve: (message) => {
@@ -94,9 +98,9 @@ function waitFor(predicate, start = 0) {
   });
 }
 
-async function request(message, predicate) {
+async function request(message, predicate, timeout) {
   const start = posted.length;
-  const pending = waitFor(predicate, start);
+  const pending = waitFor(predicate, start, timeout);
   globalThis.self.onmessage({ data: message });
   return pending;
 }
@@ -264,4 +268,62 @@ test("worker: parse retention is bounded and evicted parses re-parse correctly (
   } finally {
     workerModule.setMaxRetainedParses(2);
   }
+});
+
+// MTK DRDI card open (Stage C): the scan seeds the image memo through the
+// onMtkImage hook, so the first parseCard never re-unwraps (a Tensor rebuild
+// would re-verify 640 SHA-384 slot digests); reopen hits the per-card parse
+// memo and the worker-side table cache; release drops everything.
+const mtkWorkerImage = "mtk_pocox8pro_d8500u_modem.img";
+const mtkWorkerAvailable = () => existsSync(join(CORPUS_DIR, mtkWorkerImage));
+
+test("worker: MTK card open reuses the scan-seeded image memo (corpus-gated)", { skip: !mtkWorkerAvailable() }, async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const file = new File([await readFile(join(CORPUS_DIR, mtkWorkerImage))], mtkWorkerImage);
+  const sourceId = 401;
+  const scan = await request(
+    { type: "scan", id: 7, files: [{ sourceId, file }] },
+    (m) => m.type === "records" && m.fileIndex === 0,
+    60000,
+  );
+  const record = scan.records[0];
+  assert.equal(record.generation, "MediaTek DRDI");
+  const afterScan = workerModule.getDebugCounters();
+  assert.equal(afterScan.unwrapMtk, 0, "the scan seeds the image memo — no card-open unwrap");
+
+  const tablesReply = await request(
+    { type: "parseCard", id: 61, sourceId, fileIndex: 0, record },
+    (m) => m.type === "tables" && m.id === 61,
+  );
+  await delay(30); // let the fire-and-forget cache put settle
+  const afterFirst = workerModule.getDebugCounters();
+  assert.equal(afterFirst.unwrapMtk, afterScan.unwrapMtk, "card open must not re-unwrap");
+  assert.equal(afterFirst.parseMtkProfile, afterScan.parseMtkProfile + 1, "one per-card parse");
+  assert.equal(afterFirst.generateMtkTables, afterScan.generateMtkTables + 1, "one table build");
+  const tables = tablesReply.tables;
+  assert.deepEqual(Object.keys(tables), ["lte_ca", "nr_ca", "endc", "nrdc"]);
+  assert.ok(isValidTablesShape(tables), "viewer envelope shape");
+  assert.equal(tables.endc.length, record.mtk.counts.endc, "ENDC rows match the scan count");
+  assert.equal(tables.nr_ca.length, record.mtk.counts.nrca, "NR-CA rows match the scan count");
+  assert.equal(tables.lte_ca.length, record.mtk.counts.lte, "LTE rows match the scan count");
+
+  await request({ type: "parseCard", id: 62, sourceId, fileIndex: 0, record }, (m) => m.type === "tables" && m.id === 62);
+  const afterReopen = workerModule.getDebugCounters();
+  assert.equal(afterReopen.parseMtkProfile, afterFirst.parseMtkProfile, "reopening hits the per-card parse memo");
+  assert.equal(afterReopen.generateMtkTables, afterFirst.generateMtkTables, "reopening hits the table cache");
+  assert.equal(afterReopen.unwrapMtk, afterFirst.unwrapMtk, "reopening keeps the image memo");
+
+  globalThis.self.onmessage({ data: { type: "release" } });
+  await delay(20);
+  // release drops the registered sources (the table cache is clearCache's
+  // job), so a card that was never parsed must fail loudly on its sourceId.
+  const uncached = scan.records[1];
+  assert.ok(uncached, "the image carries a second card");
+  const reply = await request(
+    { type: "parseCard", id: 63, sourceId, fileIndex: 0, record: uncached },
+    (m) => m.type === "error" && m.id === 63,
+    30000,
+  );
+  assert.match(reply.message, /unknown sourceId/, "release drops the registered source");
 });

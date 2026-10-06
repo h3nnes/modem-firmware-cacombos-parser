@@ -84,10 +84,10 @@ const loadedFiles = []; // distinct source-file names, first appearance first (c
 let scanEntries = []; // [{ sourceId, file }] snapshot of the scan in flight/last completed
 let nextSourceId = 1; // monotonically increasing; NEVER reused (cards accumulate across imports)
 // Incremental card list: rows are keyed by card key and only appended; the
-// header/rows are rebuilt only when the all-Apple vs mixed/Qualcomm layout
-// flips. Progressive Apple batches coalesce into one requestAnimationFrame.
+// header/rows are rebuilt only when the all-MTK vs all-Apple vs mixed/Qualcomm
+// layout flips. Progressive Apple batches coalesce into one requestAnimationFrame.
 const cardRows = new Map(); // card key -> HTMLTableRowElement
-let cardListLayout = null; // "apple" | "qcom" currently rendered
+let cardListLayout = null; // "mtk" | "apple" | "qcom" currently rendered
 let cardListRaf = null;
 let sessionEpoch = 0; // bumped by Clear; worker replies from an earlier epoch are dropped
 let scanEpoch = 0; // epoch of the scan whose replies are currently arriving
@@ -211,6 +211,8 @@ const CARDLIST_HEAD_QCOM =
   '<th></th><th>Name</th><th>HWID_FSID_BID</th><th>Format</th><th>LTE combos</th><th>NR combos</th>';
 const CARDLIST_HEAD_APPLE =
   '<th></th><th>CR Bank</th><th>Layout</th><th>Profile ID</th><th>LTE</th><th>EN-DC</th><th>NR-CA</th><th>NRDC</th><th>File Size</th><th>Source Path</th>';
+const CARDLIST_HEAD_MTK =
+  '<th></th><th>Bank</th><th>Profile</th><th>EN-DC</th><th>NR-CA</th><th>NR-DC</th><th>LTE CA</th><th>File Size</th><th>Source Path</th>';
 
 function buildCardRow(card, layout) {
   const record = card.record;
@@ -228,47 +230,67 @@ function buildCardRow(card, layout) {
 
   // Apple CR rows keep their scan-time counts in record.apple.counts (their
   // lte_combos/nr_combos stay null: combo-table parsing is deferred to card
-  // open). When such rows render under the qcom column layout (mixed imports),
-  // derive the combo cells from the scan counts instead of showing "—": LTE as
-  // a plain count and NR as the qcom endc+nrca+nrdc=total format (NSA=EN-DC,
-  // SA=NR-CA, NR-DC=NRDC).
+  // open). MTK rows keep theirs in record.mtk.counts the same way. When such
+  // rows render under the qcom column layout (mixed imports), derive the combo
+  // cells from the scan counts instead of showing "—": LTE as a plain count
+  // and NR as the qcom endc+nrca+nrdc=total format (NSA=EN-DC, SA=NR-CA,
+  // NR-DC=NRDC).
   const appleCounts = record.apple ? record.apple.counts : null;
+  const mtkCounts = record.mtk ? record.mtk.counts : null;
+  const mtkTotal = mtkCounts ? mtkCounts.endc + mtkCounts.nrca + mtkCounts.nrdc : 0;
   const lteCell = appleCounts
     ? appleCounts.lte.toLocaleString("en-US")
-    : record.lte_combos == null
-      ? "—"
-      : record.lte_combos.toLocaleString("en-US");
+    : mtkCounts
+      ? mtkCounts.lte.toLocaleString("en-US")
+      : record.lte_combos == null
+        ? "—"
+        : record.lte_combos.toLocaleString("en-US");
   const nrCell = appleCounts
     ? `${appleCounts.endc}+${appleCounts.nrca}+${appleCounts.nrdc}=${
         appleCounts.endc + appleCounts.nrca + appleCounts.nrdc
       }`
-    : String(record.nr_combos ?? "");
+    : mtkCounts
+      ? `${mtkCounts.endc}+${mtkCounts.nrca}+${mtkCounts.nrdc}=${mtkTotal}`
+      : String(record.nr_combos ?? "");
+  // Scan counts are the only count source for apple/MTK rows and a bank
+  // skipped at scan has none — guard on the actual null/undefined.
+  const countCell = (counts, key) => (counts == null ? "—" : counts[key].toLocaleString("en-US"));
 
-  const cells = layout === "apple"
+  const cells = layout === "mtk"
     ? [
-        [record.inner_path, "cell-name"],
-        [APPLE_LAYOUT_DESC[record.apple.layout] ?? record.apple.layout ?? "—", "cell-identity"],
-        [record.apple.profileId == null ? "—" : `0x${record.apple.profileId.toString(16).toUpperCase().padStart(6, "0")}`, "cell-generation"],
-        // Apple counts are the expanded pre-dedupe numbers from the scan inspect
-        // (null-safe: a bank skipped at scan has no counts).
-        [record.apple.counts == null ? "—" : record.apple.counts.lte.toLocaleString("en-US"), "cell-lte"],
-        [record.apple.counts == null ? "—" : record.apple.counts.endc.toLocaleString("en-US"), "cell-lte"],
-        [record.apple.counts == null ? "—" : record.apple.counts.nrca.toLocaleString("en-US"), "cell-lte"],
-        [record.apple.counts == null ? "—" : record.apple.counts.nrdc.toLocaleString("en-US"), "cell-lte"],
+        [String(record.mtk.bankIndex), "cell-identity"],
+        [String(record.mtk.profile), "cell-identity"],
+        // Counts are real combos decoded at scan time (spec §2).
+        [countCell(mtkCounts, "endc"), "cell-lte"],
+        [countCell(mtkCounts, "nrca"), "cell-lte"],
+        [countCell(mtkCounts, "nrdc"), "cell-lte"],
+        [countCell(mtkCounts, "lte"), "cell-lte"],
         [humanSize(record.size), "cell-nr"],
         [String(record.source_path ?? ""), "cell-nr"],
       ]
-    : [
-        [record.name, "cell-name"],
-        [identity, "cell-identity"],
-        [GENERATION_DISPLAY[record.generation] ?? record.generation, "cell-generation"],
-        // lte_combos is null while an apple CR card's counts are deferred to card
-        // open — `null >= 0` is true in JS (null coerces to 0), so a plain >=
-        // check would reach null.toLocaleString() and abort the whole list
-        // render. Guard on the actual null/undefined instead.
-        [lteCell, "cell-lte"],
-        [nrCell, "cell-nr"],
-      ];
+    : layout === "apple"
+      ? [
+          [record.inner_path, "cell-name"],
+          [APPLE_LAYOUT_DESC[record.apple.layout] ?? record.apple.layout ?? "—", "cell-identity"],
+          [record.apple.profileId == null ? "—" : `0x${record.apple.profileId.toString(16).toUpperCase().padStart(6, "0")}`, "cell-generation"],
+          [countCell(record.apple.counts, "lte"), "cell-lte"],
+          [countCell(record.apple.counts, "endc"), "cell-lte"],
+          [countCell(record.apple.counts, "nrca"), "cell-lte"],
+          [countCell(record.apple.counts, "nrdc"), "cell-lte"],
+          [humanSize(record.size), "cell-nr"],
+          [String(record.source_path ?? ""), "cell-nr"],
+        ]
+      : [
+          [record.name, "cell-name"],
+          [identity, "cell-identity"],
+          [GENERATION_DISPLAY[record.generation] ?? record.generation, "cell-generation"],
+          // lte_combos is null while an apple CR card's counts are deferred to card
+          // open — `null >= 0` is true in JS (null coerces to 0), so a plain >=
+          // check would reach null.toLocaleString() and abort the whole list
+          // render. Guard on the actual null/undefined instead.
+          [lteCell, "cell-lte"],
+          [nrCell, "cell-nr"],
+        ];
   for (const [value, cls] of cells) {
     const td = document.createElement("td");
     td.className = cls;
@@ -279,14 +301,15 @@ function buildCardRow(card, layout) {
 }
 
 // Incremental list render: append only cards that have no row yet. A layout
-// flip (all-Apple vs mixed/Qualcomm; the row cell sets and header differ) is the
-// only case that rebuilds the already-rendered rows.
+// flip (all-MTK vs all-Apple vs mixed/Qualcomm; the row cell sets and header
+// differ) is the only case that rebuilds the already-rendered rows.
 function renderCardList() {
+  const allMtk = cards.length > 0 && cards.every((c) => c.record.mtk);
   const allApple = cards.length > 0 && cards.every((c) => c.record.apple);
-  const layout = allApple ? "apple" : "qcom";
+  const layout = allMtk ? "mtk" : allApple ? "apple" : "qcom";
   if (cardListLayout !== layout) {
     cardListLayout = layout;
-    els.cardHead.innerHTML = allApple ? CARDLIST_HEAD_APPLE : CARDLIST_HEAD_QCOM;
+    els.cardHead.innerHTML = allMtk ? CARDLIST_HEAD_MTK : allApple ? CARDLIST_HEAD_APPLE : CARDLIST_HEAD_QCOM;
     cardRows.clear();
     els.cardBody.replaceChildren();
   }

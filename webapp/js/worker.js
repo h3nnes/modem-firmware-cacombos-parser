@@ -92,6 +92,10 @@ import {
   generateAppleTables,
   exportAppleDiag,
 } from "./lib/apple_cr.js";
+import { unwrapBytes } from "./lib/mtk_containers.js";
+import { decodeMtkSummary, mtkCardCombos } from "./lib/mtk_scan.js";
+import { Reporter } from "./lib/mtk_universal.js";
+import { generateMtkTables } from "./lib/mtk_tables.js";
 import {
   bump,
   snapshotDebugCounters,
@@ -141,6 +145,19 @@ const containerMemo = new Map();
 // memoize the inflated ftab member they were sliced from.
 const appleBankMemo = new Map(); // sourceId -> Map<key, {bank, parsed}>
 const appleMemberMemo = new Map(); // sourceId -> Map<memberName, Promise<Uint8Array>>
+// MTK card-open memos (spec §3). mtkImageMemo holds the UNWRAPPED PARTS plus
+// decodeMtkSummary's result incl. its live seams (_loader/_cap/_states/
+// _perProfile/_lteProfiles/_secondary): the scan decodes everything already and
+// seeds this via the onMtkImage hook, so card open is a pure read over the
+// memoized image state. Rebuilding the TensorCdfLoader per card open is
+// prohibitively expensive (it re-verifies 640 SHA-384 slot digests), and a cold
+// open (fresh session, entry evicted) re-runs unwrap+discovery — acceptable,
+// seconds-scale. mtkParseMemo mirrors the apple bank memo: the per-card
+// {combos, lteCombos} derivation (fresh allocations for Tensor secondary and
+// bank-only profiles), evictable without touching the shared image state.
+const MTK_IMAGE_RETAINED = 2; // ~100 MB decompressed per source — bound like the apple banks
+const mtkImageMemo = new Map(); // sourceId -> { parts, summary } (insertion = LRU order)
+const mtkParseMemo = new Map(); // sourceId -> Map<key, {combos, lteCombos}>
 
 // Step 3: retained scan-time candidate bytes. The scan already read (and
 // hashed) every candidate; seeding parseMemo with those exact bytes means the
@@ -208,7 +225,11 @@ function parsedFor(sourceId, fileIndex, record) {
   const key = parseJobKey(sourceId, record);
   let pending = parsedInflight.get(key);
   if (!pending) {
-    pending = record.apple ? ensureAppleParsed(sourceId, fileIndex, record) : ensureParsed(sourceId, fileIndex, record);
+    pending = record.apple
+      ? ensureAppleParsed(sourceId, fileIndex, record)
+      : record.mtk
+        ? ensureMtkParsed(sourceId, fileIndex, record)
+        : ensureParsed(sourceId, fileIndex, record);
     parsedInflight.set(key, pending);
     // In-flight only: drop the promise once it settles either way. Keeping a
     // fulfilled promise would pin its parse forever and bypass the retention
@@ -520,6 +541,61 @@ async function ensureAppleParsed(sourceId, fileIndex, record) {
   return { bank: entry.bank, parsed: entry.parsed };
 }
 
+// --- MTK DRDI card open ------------------------------------------------------------
+
+// Image state for a sourceId: the scan seeds mtkImageMemo (onMtkImage hook);
+// a miss re-unwraps + re-decodes lazily. Bounded by its own small LRU —
+// entries are per-source and every card of a source shares one, so the
+// retainedParses cap (per card) would thrash a shared entry.
+function seedMtkImage(sourceId, parts, summary) {
+  mtkImageMemo.delete(sourceId); // re-seed moves the entry to the LRU end
+  mtkImageMemo.set(sourceId, { parts, summary });
+  while (mtkImageMemo.size > MTK_IMAGE_RETAINED) {
+    const [oldest] = mtkImageMemo.entries().next().value;
+    mtkImageMemo.delete(oldest);
+  }
+}
+
+async function ensureMtkImage(sourceId) {
+  const memo = mtkImageMemo.get(sourceId);
+  if (memo) {
+    mtkImageMemo.delete(sourceId);
+    mtkImageMemo.set(sourceId, memo); // LRU touch
+    return memo;
+  }
+  const { file, source } = sourceEntry(sourceId);
+  bump("unwrapMtk");
+  const parts = await unwrapBytes(await source.read(0, source.size), file && file.name ? file.name : "");
+  const summary = await decodeMtkSummary(parts, new Reporter());
+  seedMtkImage(sourceId, parts, summary);
+  return mtkImageMemo.get(sourceId);
+}
+
+// Per-card parse: the profile's decoded combos + LTE CA row rows, derived
+// from the memoized image state (no re-parse happens — the scan's decode is
+// the parse). Eviction follows the apple "delete heavy entry" model: the
+// per-card entry is dropped, so a later open re-derives from the image memo.
+async function ensureMtkParsed(sourceId, fileIndex, record) {
+  let memo = mtkParseMemo.get(sourceId);
+  if (!memo) {
+    memo = new Map();
+    mtkParseMemo.set(sourceId, memo);
+  }
+  const key = blobMemoKey(record);
+  let entry = memo.get(key);
+  if (!entry) {
+    const image = await ensureMtkImage(sourceId);
+    bump("parseMtkProfile");
+    entry = mtkCardCombos(image.summary, record.mtk.bankIndex, record.mtk.profile);
+    memo.set(key, entry);
+  }
+  const retained = entry;
+  retainParse(parseJobKey(sourceId, record), () => {
+    if (memo.get(key) === retained) memo.delete(key);
+  });
+  return entry;
+}
+
 // Export dispatch for apple records. mbn = the raw decompressed bank (pure
 // dump, no parse); json/csv/webcsv/b0cd/b826 go through the parsed bank.
 async function exportAppleFiles(sourceId, fileIndex, record, format) {
@@ -610,6 +686,9 @@ async function handleScan(msg) {
         // re-walking FAT/ext4, or re-extracting the container.
         onCandidate: (record, blob) => seedCandidateBlob(sourceId, record, blob),
         onAppleMember: (data, memberName) => seedAppleMember(sourceId, data, memberName),
+        // MTK images: the scan's decode is the card-open parse — keep the
+        // unwrapped parts + summary so the first parseCard never re-unwraps.
+        onMtkImage: (parts, summary) => seedMtkImage(sourceId, parts, summary),
       });
       if (cancelled.has(id)) break;
       post({ type: "records", fileIndex, records, warnings: warnings.slice(postedWarnings) });
@@ -650,11 +729,17 @@ async function handleParseCard(msg) {
         bump("generateAppleTables");
         return generateAppleTables(parsed);
       })()
-    : await (async () => {
-        const { parsed } = await parsedFor(msg.sourceId, msg.fileIndex, msg.record);
-        bump("generateWebTables");
-        return generateWebTables(parsed.combinations, parsed.components);
-      })();
+    : msg.record.mtk
+      ? await (async () => {
+          const parsed = await parsedFor(msg.sourceId, msg.fileIndex, msg.record);
+          bump("generateMtkTables");
+          return generateMtkTables(parsed.combos, parsed.lteCombos);
+        })()
+      : await (async () => {
+          const { parsed } = await parsedFor(msg.sourceId, msg.fileIndex, msg.record);
+          bump("generateWebTables");
+          return generateWebTables(parsed.combinations, parsed.components);
+        })();
   if (cancelled.has(msg.id)) {
     cancelled.delete(msg.id); // cancelled while parsing: no reply
     return;
@@ -761,6 +846,8 @@ function handleRelease() {
   containerMemo.clear();
   appleBankMemo.clear();
   appleMemberMemo.clear();
+  mtkImageMemo.clear();
+  mtkParseMemo.clear();
   retainedBytes.clear();
   parsedInflight.clear();
   retainedParses.clear();

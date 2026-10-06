@@ -8,8 +8,11 @@ export const debugCounters = {
   extractContainer: 0, // extractContainer() calls (per source, per open)
   parseModule: 0, // qcom parseModule() calls
   parseAppleBank: 0, // apple parseAppleBank() calls
+  unwrapMtk: 0, // MTK unwrap+decode runs (cold card opens; the scan seeds the memo)
+  parseMtkProfile: 0, // MTK per-card parses (mtkCardCombos derivations on parse-memo miss)
   generateWebTables: 0, // qcom viewer table builds
   generateAppleTables: 0, // apple viewer table builds
+  generateMtkTables: 0, // MTK viewer table builds
   fatWalk: 0, // Fat16Image.walk() traversals
   ext4Walk: 0, // Ext4Image.walk() traversals
   postMessage: 0, // worker replies posted (host<->worker transfer volume)

@@ -115,8 +115,18 @@ test("main.js card list appends rows incrementally behind delegated listeners", 
   assert.ok(source.includes('els.cardBody.addEventListener("click"'), "one delegated click listener");
   assert.equal(source.split('checkbox.addEventListener("change"').length - 1, 0, "no per-row change listeners");
   assert.equal(source.split('tr.addEventListener("click"').length - 1, 0, "no per-row click listeners");
-  // A layout flip is the only rebuild path (header + rows).
-  assert.ok(source.includes("els.cardHead.innerHTML = allApple ? CARDLIST_HEAD_APPLE : CARDLIST_HEAD_QCOM"));
+  // A layout flip is the only rebuild path (header + rows); the flip binary is
+  // 3-way (all-MTK vs all-Apple vs mixed/Qualcomm).
+  assert.ok(
+    source.includes("els.cardHead.innerHTML = allMtk ? CARDLIST_HEAD_MTK : allApple ? CARDLIST_HEAD_APPLE : CARDLIST_HEAD_QCOM"),
+  );
+  assert.ok(source.includes('const layout = allMtk ? "mtk" : allApple ? "apple" : "qcom";'), "3-way layout binary");
+  assert.ok(source.includes("CARDLIST_HEAD_MTK"), "MTK header row exists");
+  assert.ok(
+    source.includes('<th></th><th>Bank</th><th>Profile</th><th>EN-DC</th><th>NR-CA</th><th>NR-DC</th><th>LTE CA</th><th>File Size</th><th>Source Path</th>'),
+    "MTK header columns per spec §4",
+  );
+  assert.ok(source.includes("recordRows(card, \"mtk\")") || source.includes('layout === "mtk"'), "buildCardRow MTK branch");
   assert.ok(source.includes("cardRows.clear();") && source.includes("els.cardBody.replaceChildren();"));
   assert.ok(source.includes("cardsByKey.set(key, card)"), "row clicks resolve through the key map");
 });

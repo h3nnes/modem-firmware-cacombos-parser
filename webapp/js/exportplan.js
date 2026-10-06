@@ -15,10 +15,17 @@
 
 // Canonical order mirrors the Python GUI's format checkboxes
 // (gui_version/main.py:84-90): mbn, json, csv, b0cd, b826. The webapp adds a
-// "webcsv" slot (the viewer's per-table CSVs, no Python counterpart) after csv.
-// "mbn" is the raw .mbn blob under record.name (Python export_module's
-// "mbn" format); worker.js special-cases it before exportModule.
-export const EXPORT_FORMATS = ["mbn", "json", "csv", "webcsv", "b0cd", "b826"];
+// "webcsv" slot (the viewer's per-table CSVs, no Python counterpart) after csv,
+// and the MTK DRDI trace formats at the end. "mbn" is the raw .mbn blob under
+// record.name (Python export_module's "mbn" format); worker.js special-cases it
+// before exportModule.
+export const EXPORT_FORMATS = ["mbn", "json", "csv", "webcsv", "b0cd", "b826", "mtk_nr", "mtk_lte"];
+
+// Formats only MTK DRDI cards can produce (the worker's MTK export arm):
+// a qcom/apple card ticked with them enabled is skipped silently instead of
+// failing the batch with "Unsupported export format" (main.py's
+// run_bank_extraction skipped-format rule, hoisted to the job planner).
+const MTK_ONLY_FORMATS = new Set(["mtk_nr", "mtk_lte"]);
 
 // >20 exported files → deliver one zip instead of that many downloads.
 export const ZIP_FILE_THRESHOLD = 20;
@@ -28,6 +35,7 @@ export function buildExportJobs(tickedCards, enabledFormats) {
   const jobs = [];
   for (const card of tickedCards ?? []) {
     for (const format of formats) {
+      if (MTK_ONLY_FORMATS.has(format) && !(card.record && card.record.mtk)) continue;
       jobs.push({ card, format });
     }
   }

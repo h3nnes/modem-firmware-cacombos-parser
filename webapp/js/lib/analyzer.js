@@ -413,7 +413,7 @@ function defaultInspectAppleBank(stream, uncompSize) {
   };
 }
 
-export async function scanSource(source, name, { shouldCancel, inspectAppleBankAsync, onAppleBatch, onScanProgress, onCandidate, onAppleMember } = {}) {
+export async function scanSource(source, name, { shouldCancel, inspectAppleBankAsync, onAppleBatch, onScanProgress, onCandidate, onAppleMember, onMtkImage } = {}) {
   const cancelled = shouldCancel ?? (() => false);
   const reportProgress = onScanProgress ?? (() => {});
   if (cancelled()) throw new ScanCancelled();
@@ -464,6 +464,9 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
   // into the shared ScanCancelled unwind.
   const mtkScan = await scanMtk(source, name, cancelled, {
     onScanProgress: (info) => reportProgress(info),
+    // Hand the just-decoded parts + summary to the worker so card opens skip
+    // the unwrap (scanMtk seeds the memo through this hook).
+    onMtkImage: (parts, summary) => onMtkImage?.(parts, summary),
   });
   if (cancelled()) throw new ScanCancelled();
   if (mtkScan) return mtkScan;

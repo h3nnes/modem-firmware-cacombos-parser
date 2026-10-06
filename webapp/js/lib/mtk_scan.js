@@ -275,6 +275,42 @@ function comboDigestLine(combo) {
   });
 }
 
+// Card-open payload for one (bank, profile) record: pure read over a
+// decodeMtkSummary result's live seams — the scan already decoded every
+// profile, so the worker's card open never re-unwraps or re-decodes (the
+// Tensor loader in particular re-verifies 640 SHA-384 slot digests).
+// Returns { combos, lteCombos }: the capability/secondary rows for the NR
+// tables plus the profile's LTE CA row-table rows, both dedup-exact. LTE
+// provenance mirrors scanMtk's counts: Tensor keeps per-physical-bank rows
+// (a Bank-6 card must not show sibling Bank-5 rows), grid uses the merged
+// per-profile projection of every bank with invariant-valid rows.
+export function mtkCardCombos(summary, bankIndex, profile) {
+  const loader = summary._loader;
+  if (bankIndex === summary.capability_bank_index && summary._perProfile.has(profile)) {
+    const combos = summary._perProfile.get(profile);
+    const lteCombos = summary.physical_lte_profiles
+      ? dedupExact(loader.lte_rows_by_bank?.[bankIndex]?.get(profile) ?? [])
+      : (summary._lteProfiles.get(profile) ?? []);
+    return { combos, lteCombos };
+  }
+  const secondary = summary._secondary.find(
+    (item) => item.bank_index === bankIndex && item.profile === profile,
+  );
+  if (secondary) {
+    const combos = secondaryCombos(secondary);
+    // Scan-time counts use the same related-LTE projection (sum.lte_count).
+    const lteCombos = summary._lteProfiles.size
+      ? tensorRelatedLte(loader, secondary.profile, summary._lteProfiles)
+      : [];
+    return { combos, lteCombos };
+  }
+  // Bank-only row-table profile (Tensor physical banks without a capability
+  // or secondary record; a grid profile with rows always has a capability
+  // record, so this arm never fires for grid).
+  const rows = loader.lte_rows_by_bank?.[bankIndex]?.get(profile) ?? [];
+  return { combos: [], lteCombos: dedupExact(rows) };
+}
+
 function mtkRecord(name, sourceName, im, bankIndex, loader, counts) {
   return {
     inner_path: im.label,
@@ -344,6 +380,10 @@ export async function scanMtk(source, name, cancelled = () => false, hooks = {})
       warnings: [{ tool: "mtk", message: `MTK DRDI decode failed: ${err.message} — skipped` }],
     };
   }
+  // Seed the worker's card-open memo: the decode just ran, so handing the
+  // parts + summary over lets the first parseCard skip the unwrap entirely
+  // (same idea as the qcom/apple scan byte seeding in worker.js).
+  hooks.onMtkImage?.(parts, summary);
   const loader = summary._loader;
   const cap = summary._cap;
   const records = [];
