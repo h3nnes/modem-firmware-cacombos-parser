@@ -20,11 +20,12 @@
 // counts { endc, nrca, nrdc, lte } }. `layout` mirrors the apple record's
 // layout field: the per-profile LTE CA row-table packaging detected at scan
 // ("legacy32" / "extended36"), or null when the profile has no rows.
-import { unwrapBytes, UnwrapError, kindOf, MTK_MAGIC } from "./mtk_containers.js";
+import { unwrapBytes, UnwrapError, kindOf, MTK_MAGIC, ModemParts } from "./mtk_containers.js";
 import { indexOfBytes } from "./bytes.js";
 import { sha256HexAsync } from "./hash.js";
 import {
   GridLoader,
+  FlatLoader,
   TensorCdfLoader,
   GrammarParser,
   FeatureResolver,
@@ -43,6 +44,7 @@ import {
   secondaryCombos,
   tensorRelatedLte,
 } from "./mtk_universal.js";
+import { Nr15Loader, nr15Probe, MOLY_NR15 } from "./mtk_nr15.js";
 
 // Cheap head pre-gate (spec §2): only plausible MTK inputs are unwrapped, so
 // arbitrary gzip files are never decompressed and qcom inputs fall through
@@ -73,10 +75,14 @@ const pyJson = (v) => {
   return `{${Object.entries(v).map(([k, val]) => `${JSON.stringify(k)}: ${pyJson(val)}`).join(", ")}}`;
 };
 
-// mtk_universal.select_loader for the ported loader families (tensor first
-// when split-CDF parts exist, then grid). The flat/MD800 family is not ported;
-// a grid rejection is terminal, recorded in the attempts list.
-async function selectLoader(parts, rep) {
+// mtk_universal.select_loader for the ported loader families, in the reference
+// family order: the Tensor split-CDF parts decide first (an NR15 image never
+// ships them), then the NR15 activation evidence, then the modern grid, then
+// the flat/MD800 pointer-run family. Every attempt is recorded in the same
+// {"loader", "accepted", "evidence"(, "reason")} shape the python ref emits
+// through its select_loader, and a total rejection carries them all.
+// Exported for the loader-order/activation tests.
+export async function selectLoader(parts, rep = new Reporter()) {
   const attempts = [];
   if (parts.drdi_data !== null) {
     if (!TensorCdfLoader.probe(parts.drdi)) {
@@ -86,6 +92,24 @@ async function selectLoader(parts, rep) {
     attempts.push({ loader: "tensor", accepted: true, evidence: "split-CDF header geometry matched" });
     const loader = await TensorCdfLoader.create(parts.rom, parts.drdi, parts.drdi_data, rep);
     return [loader, attempts];
+  }
+  // NR15 activation: a validated CHECK_HEADER trailer + indexed bandwidth
+  // enum, or plainly the MOLY.NR15. firmware string in md1rom. Only a matched
+  // activation that then fails is recorded; silence means "never tried".
+  const nr15Activated = nr15Probe(parts.rom, parts.drdi)
+    || indexOfBytes(parts.rom, MOLY_NR15, 0) >= 0;
+  if (nr15Activated) {
+    const evidence = nr15Probe(parts.rom, parts.drdi)
+      ? "CHECK_HEADER trailer + indexed NR15 bandwidth enum matched"
+      : "MOLY.NR15. firmware marker matched";
+    try {
+      const loader = new Nr15Loader(parts.rom, parts.drdi, rep);
+      attempts.push({ loader: "nr15", accepted: true, evidence });
+      return [loader, attempts];
+    } catch (err) {
+      if (!(err instanceof UniversalError)) throw err;
+      attempts.push({ loader: "nr15", accepted: false, evidence, reason: String(err.message) });
+    }
   }
   const hits = GridLoader.descriptorHits(parts.rom, parts.drdi);
   const score = GridLoader._denseScore(hits);
@@ -104,8 +128,102 @@ async function selectLoader(parts, rep) {
     return [loader, attempts];
   } catch (err) {
     attempts.push({ loader: "grid", accepted: false, evidence: `dense-run score ${score}`, reason: String(err.message) });
+  }
+  const runs = FlatLoader.probe(parts.drdi);
+  try {
+    const loader = new FlatLoader(parts.rom, parts.drdi, rep);
+    attempts.push({
+      loader: "flat",
+      accepted: true,
+      evidence: `${runs} runtime pointer runs, ${loader.discovery.length} relocations proved by grammar`,
+    });
+    return [loader, attempts];
+  } catch (err) {
+    attempts.push({ loader: "flat", accepted: false, evidence: `${runs} runtime pointer runs`, reason: String(err.message) });
     throw new UniversalError("no container loader accepted this image; attempts: " + pyJson(attempts));
   }
+}
+
+// NR15 summary: the family has no in-image candidate arrays or DL/UL feature
+// tables — profile roots are ROM-resident and the decode is the loader's own
+// two-byte MIMO grammar plus the firmware bandwidth-pair/SCS projection. The
+// flow mirrors decodeMtkSummary's shape (same envelope keys, fail-soft absent:
+// any loader proof failure is a hard UniversalError like python's extract).
+async function decodeNr15Summary(loader, attempts, rep) {
+  const cap = loader.capabilityBank();
+  const perProfile = new Map();
+  const states = [];
+  for (const im of cap.images) {
+    const [off, rows] = loader.decoder.arrays.get(im.profile);
+    const info = { file_offset: off, count: rows.length, source: "nr15_rom_root" };
+    const st = new ProfileState(im, rows, info, [], []);
+    states.push(st);
+    perProfile.set(im.profile, loader.decoder.decode(im, rows));
+    rep.info("candidate_array", "candidate array located by structural invariant", {
+      bank_va: hex(cap.bank_va),
+      profile: im.profile,
+      ...info,
+      feature_tables: 0,
+      passing_feature_pairs: 0,
+    });
+  }
+  const unionDedup = dedupExact([...perProfile.values()].flat());
+  const [lteBank, lteProfiles] = loader.lteTables(cap, rep);
+  const lteUnion = dedupExact([...lteProfiles.values()].flat());
+  const supportedBands = annotateBandParticipation(
+    discoverSupportedBands(loader, cap, lteBank, rep),
+    unionDedup,
+    lteUnion,
+  );
+  const guiCounts = guiFamilyCounts(unionDedup);
+  const [uEndc, uNrca, uLte] = classify(unionDedup, 1);
+  const profileSha256 = {};
+  for (const s of states) {
+    profileSha256[String(s.image.profile)] = await sha256HexAsync(
+      s.image.drdi.subarray(s.image.source_offset, s.image.end_source),
+    );
+  }
+  // Per-profile digest over the DECODED combo payloads — same canonical line
+  // format as every other family (comboDigestLine below).
+  const comboDigest = {};
+  const encoder = new TextEncoder();
+  for (const [profile, combos] of perProfile) {
+    comboDigest[String(profile)] = await sha256HexAsync(encoder.encode(combos.map(comboDigestLine).join("\n")));
+  }
+  return {
+    loader: loader.name,
+    loader_selection: attempts,
+    banks: loader.banks.map((b) => b.toDict()),
+    capability_bank: hex(cap.bank_va),
+    capability_bank_index: cap.table_index,
+    profiles: serializeProfileSummary(states, perProfile),
+    secondary_profiles: [],
+    lte_bank: lteBank ? hex(lteBank.bank_va) : null,
+    lte_bank_index: lteBank ? lteBank.table_index : null,
+    lte_profiles: Object.fromEntries(
+      [...lteProfiles.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => [String(k), v.length]),
+    ),
+    physical_lte_profiles: null,
+    lte_union_exact_rows: lteUnion.length,
+    gui_counts: guiCounts,
+    union: {
+      exact_rows: unionDedup.length,
+      kinds: { endc: uEndc.length, nrca: uNrca.length, lte: uLte.length },
+      complete: true,
+      unresolved_profiles: [],
+    },
+    supported_bands: supportedBands,
+    validation: rep.asDict(),
+    profile_sha256: profileSha256,
+    combo_digest: comboDigest,
+    _loader: loader,
+    _cap: cap,
+    _states: states,
+    _perProfile: perProfile,
+    _lteProfiles: lteProfiles,
+    _secondary: [],
+    _warnings: [],
+  };
 }
 
 // Full scan-time decode of one unwrapped image. Returns the python summary
@@ -116,6 +234,9 @@ async function selectLoader(parts, rep) {
 // `tool: "mtk"` warning.
 export async function decodeMtkSummary(parts, rep = new Reporter()) {
   const [loader, attempts] = await selectLoader(parts, rep);
+  if (loader instanceof Nr15Loader) {
+    return decodeNr15Summary(loader, attempts, rep);
+  }
   const parser = new GrammarParser(loader, rep);
   // Grid selected its bank through the same proof during selectLoader (cached);
   // Tensor proves here. Either way the CandidateNode results land in the
@@ -377,6 +498,16 @@ export async function scanMtk(source, name, cancelled = () => false, hooks = {})
     return null;
   }
   if (cancelled()) return null;
+  return scanMtkParts(parts, name, cancelled, hooks);
+}
+
+// Scan an ALREADY-UNWRAPPED modem parts object (a single image's ModemParts or
+// an extracted multi-file parts set from unwrapFiles) into the same per-(bank,
+// profile) record envelope. `name` is the display source (file name or parts
+// folder label); the caller owns seeding its memo through onMtkImage.
+export async function scanMtkParts(parts, name, cancelled = () => false, hooks = {}) {
+  const onScanProgress = hooks.onScanProgress ?? (() => {});
+  if (cancelled()) return null;
   const rep = new Reporter();
   let summary;
   try {
@@ -428,7 +559,7 @@ export async function scanMtk(source, name, cancelled = () => false, hooks = {})
       im,
       cap.table_index,
       loader.name,
-      { endc: counts.endc, nrca: counts.nrca, nrdc: counts.nrdc, lte: lteCount },
+      { endc: counts.endc, nr_sa: counts.nr_sa, nrca: counts.nrca, nrdc: counts.nrdc, lte: lteCount },
     );
     record.sha256 = summary.profile_sha256[String(im.profile)];
     records.push(record);
@@ -446,7 +577,7 @@ export async function scanMtk(source, name, cancelled = () => false, hooks = {})
       im,
       item.bank_index,
       loader.name,
-      { endc: counts.endc, nrca: counts.nrca, nrdc: counts.nrdc, lte: sum.lte_count },
+      { endc: counts.endc, nr_sa: counts.nr_sa, nrca: counts.nrca, nrdc: counts.nrdc, lte: sum.lte_count },
     );
     record.sha256 = await sha256HexAsync(im.drdi.subarray(im.source_offset, im.end_source));
     records.push(record);
@@ -469,7 +600,7 @@ export async function scanMtk(source, name, cancelled = () => false, hooks = {})
           im,
           Number(b),
           loader.name,
-          { endc: 0, nrca: 0, nrdc: 0, lte: count },
+          { endc: 0, nr_sa: 0, nrca: 0, nrdc: 0, lte: count },
         );
         record.sha256 = await sha256HexAsync(im.drdi.subarray(im.source_offset, im.end_source));
         records.push(record);

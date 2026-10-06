@@ -123,7 +123,7 @@ test("main.js card list appends rows incrementally behind delegated listeners", 
   assert.ok(source.includes('const layout = allMtk ? "mtk" : allApple ? "apple" : "qcom";'), "3-way layout binary");
   assert.ok(source.includes("CARDLIST_HEAD_MTK"), "MTK header row exists");
   assert.ok(
-    source.includes('<th></th><th>Bank</th><th>Profile</th><th>EN-DC</th><th>NR-CA</th><th>NR-DC</th><th>LTE CA</th><th>File Size</th><th>Source Path</th>'),
+    source.includes('<th></th><th>Bank</th><th>Profile</th><th>EN-DC</th><th>NR-CA</th><th>NR-SA</th><th>NR-DC</th><th>LTE CA</th><th>File Size</th><th>Source Path</th>'),
     "MTK header columns per spec §4",
   );
   assert.ok(source.includes("recordRows(card, \"mtk\")") || source.includes('layout === "mtk"'), "buildCardRow MTK branch");

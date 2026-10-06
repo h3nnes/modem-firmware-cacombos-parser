@@ -650,6 +650,24 @@ class Unwrapper {
     }
   }
 
+  // Directory equivalent (python unwrap_path per-directory collect): a list of
+  // {name, data} files sharing one folder namespace, sorted by name like
+  // sorted(path.iterdir()). Files are charged here (the walk() caller charges
+  // its own single input; there is no single input here).
+  async directory(label, files, depth = 0) {
+    this.depth(depth);
+    this.report.layers.push({ format: "directory", source: label });
+    const sorted = [...files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const self = this;
+    await this.collect((function* entries() {
+      for (const f of sorted) {
+        self.entry();
+        self.charge(f.data.length);
+        yield [f.name, f.data];
+      }
+    })(), label, depth);
+  }
+
   async finish() {
     const unique = new Map();
     for (const [parts, origins, source] of this.bundles) {
@@ -695,6 +713,36 @@ export async function unwrapBytes(data, name = "image", limits = new Limits(), h
     worker.charge(data.length);
     worker.report.input = { source: String(name), bytes: data.length, sha256: await sha256HexAsync(data) };
     await worker.walk(data, String(name), 0);
+    return await worker.finish();
+  } catch (e) {
+    worker.report.error = e.message;
+    throw new UnwrapError(e.message, worker.report);
+  }
+}
+
+// Unwrap a set of extracted parts: [{name, data, dir?}] grouped by folder.
+// Each folder is its own namespace (parts are never joined across folders),
+// like unwrap_path(dir) with its recursive per-directory collect. A plain
+// multi-select without a webkitRelativePath carries dir "" — one implied root
+// namespace. finish() dedups complete sets per-part by SHA-256 and refuses
+// more than one distinct set, exactly like the single-image path.
+export async function unwrapFiles(files, label = "files", limits = new Limits(), hooks = {}) {
+  const worker = new Unwrapper(limits, hooks);
+  try {
+    worker.report.input = { source: String(label), files: files.length };
+    const byDir = new Map();
+    for (const f of files) {
+      const dir = f.dir ?? "";
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(f);
+    }
+    // Shallowest namespaces first (unwrap_path visits parents before children).
+    const dirs = [...byDir.keys()].sort((a, b) =>
+      a.split("/").length - b.split("/").length || (a < b ? -1 : a > b ? 1 : 0));
+    for (const dir of dirs) {
+      const depth = dir ? dir.split("/").length : 0;
+      await worker.directory(dir ? `${label}/${dir}` : label, byDir.get(dir), depth);
+    }
     return await worker.finish();
   } catch (e) {
     worker.report.error = e.message;

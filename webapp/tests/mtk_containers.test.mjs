@@ -8,6 +8,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import {
   unwrapBytes,
+  unwrapFiles,
   Limits,
   UnwrapError,
   role,
@@ -481,6 +482,88 @@ test("mtk containers: xz layers are refused at the sniff site", async () => {
   await expectUnwrapError(xz, "xz layer not supported in webapp", "x");
   const wrapped = mtkPartition([{ name: "md1drdi", data: xz }, { name: "md1rom", data: fill(16, 50) }]);
   await expectUnwrapError(wrapped, "xz layer not supported in webapp", "x");
+});
+
+// --- unwrapFiles: extracted parts, grouped per folder namespace ----------------
+
+test("mtk unwrapFiles: implied-root plain multi-select completes a set with per-part sha256", async () => {
+  const rom = fill(128, 60);
+  const drdi = fill(64, 61);
+  const parts = await unwrapFiles([
+    { name: "md1rom.img", data: rom },
+    { name: "md1drdi.img", data: drdi },
+  ], "MediaTek parts");
+  assert.equal(parts.rom, rom);
+  assert.equal(parts.drdi, drdi);
+  assert.equal(parts.drdi_data, null);
+  assert.equal(parts.report.packaging, "single-drdi");
+  assert.equal(parts.report.identical_sets, 1);
+  assert.deepEqual(Object.keys(parts.report.selected).sort(), ["md1drdi", "md1rom"]);
+  assert.equal(parts.report.selected.md1rom.sha256, sha256Hex(rom));
+  assert.equal(parts.report.selected.md1drdi.bytes, drdi.length);
+});
+
+test("mtk unwrapFiles: folders are separate namespaces; more than one set is an error", async () => {
+  const romA = fill(128, 62);
+  const drdiA = fill(64, 63);
+  const romB = fill(128, 64);
+  const drdiB = fill(64, 65);
+  // Two folders, one complete + one partial: the complete set wins, the
+  // partial is recorded.
+  const ok = await unwrapFiles([
+    { name: "md1rom.img", data: romA, dir: "deviceA" },
+    { name: "md1drdi.img", data: drdiA, dir: "deviceA" },
+    { name: "md1rom.img", data: romB, dir: "deviceB" },
+  ], "files");
+  assert.equal(ok.rom, romA);
+  assert.deepEqual(ok.report.partial_sets, [{ source: "files/deviceB", parts: ["md1rom"] }]);
+  // Two complete sets (different content) -> the finish() refusal, word for
+  // word like unwrapBytes: callers fall back to per-file scanning.
+  await assert.rejects(
+    () => unwrapFiles([
+      { name: "md1rom.img", data: romA, dir: "deviceA" },
+      { name: "md1drdi.img", data: drdiA, dir: "deviceA" },
+      { name: "md1rom.img", data: romB, dir: "deviceB" },
+      { name: "md1drdi.img", data: drdiB, dir: "deviceB" },
+    ], "files"),
+    (e) => e instanceof UnwrapError
+      && e.message === "2 different modem sets found; pass the intended image or parts directory explicitly",
+  );
+  // Byte-identical sets inside ONE folder collapse (identical_sets = 2) only
+  // when names conflict; the role map keeps the first, so they are one bundle.
+  const twin = await unwrapFiles([
+    { name: "md1rom.img", data: romA, dir: "" },
+    { name: "md1drdi.img", data: drdiA, dir: "" },
+    { name: "md1rom.img", data: romA, dir: "" },
+    { name: "md1drdi.img", data: drdiA, dir: "" },
+  ], "files");
+  assert.equal(twin.report.identical_sets, 1);
+  // Conflicting same-role parts in one folder are refused.
+  await assert.rejects(
+    () => unwrapFiles([
+      { name: "md1rom.img", data: romA, dir: "" },
+      { name: "md1rom.img", data: romB, dir: "" },
+      { name: "md1drdi.img", data: drdiA, dir: "" },
+    ], "files"),
+    (e) => e instanceof UnwrapError && /conflicting md1rom parts in files/.test(e.message),
+  );
+});
+
+test("mtk unwrapFiles: incomplete set and non-role files are reported, not fatal", async () => {
+  const rom = fill(128, 66);
+  await assert.rejects(
+    () => unwrapFiles([
+      { name: "md1rom.img", data: rom, dir: "" },
+      { name: "notes.txt", data: fill(16, 67), dir: "" },
+    ], "files"),
+    (e) => {
+      assert.ok(e instanceof UnwrapError);
+      assert.match(e.message, /^no complete modem set found/);
+      assert.deepEqual(e.report.partial_sets, [{ source: "files", parts: ["md1rom"] }]);
+      assert.deepEqual(e.report.ignored, [{ source: "files!/notes.txt", bytes: 16 }]);
+      return true;
+    },
+  );
 });
 
 test("mtk containers: invalid MTK partition headers are rejected with offsets", async () => {

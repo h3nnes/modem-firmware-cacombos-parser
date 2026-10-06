@@ -32,12 +32,21 @@ const ROWS = [
 // nospace row texts:    "1a+3a2+215"        / "42e430+30"       / "7a215"
 
 test("TAB_DEFINITIONS mirror viewer.py (label, table key) pairs", () => {
-  assert.deepEqual(TAB_DEFINITIONS, [
+  // Qualcomm/Apple tabs keep viewer.py's order; "NR SA" is the MediaTek-only
+  // single-carrier tab from mtk_viewer.py (only shown when an MTK card has rows).
+  assert.deepEqual(TAB_DEFINITIONS.filter(([, key]) => key !== "nr_sa"), [
     ["LTE", "lte_ca"],
     ["NRCA", "nr_ca"],
     ["ENDC", "endc"],
     ["NRDC", "nrdc"],
   ]);
+  assert.deepEqual(TAB_DEFINITIONS, [
+    ["LTE", "lte_ca"],
+    ["NR SA", "nr_sa"],
+    ["NRCA", "nr_ca"],
+    ["ENDC", "endc"],
+    ["NRDC", "nrdc"],
+  ], "the MTK tab order is mtk_viewer.py's");
 });
 
 test("EMPTY_COUNT_LABEL matches the no-tabs label (viewer.py:390)", () => {

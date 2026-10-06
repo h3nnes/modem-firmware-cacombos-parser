@@ -20,6 +20,8 @@ const ASCII_DIGITS_RE = /^[0-9]+$/;
 
 export const TAB_DEFINITIONS = [
   ["LTE", "lte_ca"],
+  // MediaTek only: single-carrier NR rows (mtk_viewer.py "NR SA (1CC)").
+  ["NR SA", "nr_sa"],
   ["NRCA", "nr_ca"],
   ["ENDC", "endc"],
   ["NRDC", "nrdc"],

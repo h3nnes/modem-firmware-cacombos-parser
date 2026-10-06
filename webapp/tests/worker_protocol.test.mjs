@@ -302,7 +302,7 @@ test("worker: MTK card open reuses the scan-seeded image memo (corpus-gated)", {
   assert.equal(afterFirst.parseMtkProfile, afterScan.parseMtkProfile + 1, "one per-card parse");
   assert.equal(afterFirst.generateMtkTables, afterScan.generateMtkTables + 1, "one table build");
   const tables = tablesReply.tables;
-  assert.deepEqual(Object.keys(tables), ["lte_ca", "nr_ca", "endc", "nrdc"]);
+  assert.deepEqual(Object.keys(tables), ["lte_ca", "nr_sa", "nr_ca", "endc", "nrdc"]);
   assert.ok(isValidTablesShape(tables), "viewer envelope shape");
   assert.equal(tables.endc.length, record.mtk.counts.endc, "ENDC rows match the scan count");
   assert.equal(tables.nr_ca.length, record.mtk.counts.nrca, "NR-CA rows match the scan count");
@@ -398,4 +398,144 @@ test("worker: MTK export + importCards produce the golden trace texts (corpus-ga
   );
   assert.equal(imported.files[0].text, golden[key].mtk_nr);
   assert.equal(imported.files[1].text, golden[key].mtk_lte);
+});
+
+// --- multi-file MediaTek parts import -------------------------------------------
+//
+// Role-named files (md1rom / md1drdi / md1drdi_hdr / md1drdi_data) are grouped
+// per folder namespace and unwrapped as ONE modem, posted under the FIRST
+// part's fileIndex. The critical regression pin here is the FALLBACK: a parts
+// attempt that fails (incomplete set, multiple sets) must push the affected
+// files back through the normal per-file scan — the upstream implementation
+// silently swallowed them (the "blackhole" bug).
+
+const { buildGridImage, mtkPartition, romArea } = await import("./mtk_fixtures.mjs");
+
+test("worker: MediaTek parts import posts one bundle under the first part's fileIndex", async () => {
+  const fixture = buildGridImage();
+  const romId = 601;
+  const drdiId = 602;
+  const scan = await request(
+    {
+      type: "scan", id: 20, files: [
+        { sourceId: romId, file: new File([fixture.rom], "md1rom.bin") },
+        { sourceId: drdiId, file: new File([fixture.drdi], "md1drdi.bin") },
+      ],
+    },
+    (m) => m.type === "records" && m.fileIndex === 0,
+    30000,
+  );
+  assert.equal(scan.records.length, 1, "the parts bundle decodes like a single image");
+  assert.equal(scan.records[0].generation, "MediaTek DRDI");
+  assert.equal(scan.records[0].name, "Bank 0 profile 0");
+  assert.equal(scan.records[0].source_path, "MediaTek parts");
+  assert.deepEqual(scan.records[0].mtk.counts, { endc: 1, nr_sa: 0, nrca: 0, nrdc: 0, lte: 1 });
+  // The bundle consumed BOTH parts: no per-file records reply for fileIndex 1.
+  assert.equal(
+    posted.filter((m) => m.type === "records" && m.fileIndex === 1).length, 0,
+    "consumed parts files are skipped by the per-file loop",
+  );
+  // Card open from the bundle memo (seeded via onMtkImage): no re-unwrap.
+  const afterScan = workerModule.getDebugCounters();
+  const tablesReply = await request(
+    { type: "parseCard", id: 201, sourceId: romId, fileIndex: 0, record: scan.records[0] },
+    (m) => m.type === "tables" && m.id === 201,
+    30000,
+  );
+  assert.ok(isValidTablesShape(tablesReply.tables));
+  const afterOpen = workerModule.getDebugCounters();
+  assert.equal(afterOpen.unwrapMtk, afterScan.unwrapMtk, "the seeded bundle memo must prevent a re-unwrap");
+  globalThis.self.onmessage({ data: { type: "release" } });
+  await delay(20);
+});
+
+test("worker: a failed parts unwrap falls back to the per-file scan (blackhole regression)", async () => {
+  // A file whose NAME carries a role token but whose CONTENT is a tar container
+  // with a qcom RF card: the parts attempt fails (no complete modem set), so
+  // the file must be scanned per file exactly as if it had never been routed —
+  // with the failure surfaced as a warning, never silently swallowed.
+  const sourceId = 701;
+  const scan = await request(
+    {
+      type: "scan", id: 21, files: [
+        { sourceId, file: new File([TAR], "md1rom_payload.tar") },
+      ],
+    },
+    (m) => m.type === "records" && m.fileIndex === 0,
+    30000,
+  );
+  assert.equal(scan.records.length, 1, "the per-file scan still finds the tar's qcom card");
+  assert.equal(scan.records[0].generation !== "MediaTek DRDI", true);
+  assert.equal(scan.warnings.length, 1, "exactly the parts-fallback warning");
+  assert.equal(scan.warnings[0].tool, "mtk");
+  assert.match(scan.warnings[0].message, /^MediaTek parts unwrap failed: /);
+  assert.match(scan.warnings[0].message, /scanned per file instead$/);
+});
+
+test("worker: a parts bundle that unwraps but decodes nothing warns (never a silent pass)", async () => {
+  // md1rom + md1drdi form a complete set, but the drdi decodes to nothing:
+  // the bundle reply carries the standard tool:"mtk" decode warning under the
+  // first part's fileIndex, and the second part stays consumed (skipped).
+  const { rom } = romArea();
+  const drdi = new Uint8Array(0x400).map((_, i) => (i * 31 + 5) & 0xff);
+  const romId = 801;
+  const drdiId = 802;
+  const scan = await request(
+    {
+      type: "scan", id: 22, files: [
+        { sourceId: romId, file: new File([rom], "md1rom.bin") },
+        { sourceId: drdiId, file: new File([drdi], "md1drdi.bin") },
+      ],
+    },
+    (m) => m.type === "records" && m.fileIndex === 0,
+    30000,
+  );
+  assert.deepEqual(scan.records, []);
+  assert.equal(scan.warnings.length >= 1, true);
+  assert.equal(scan.warnings[0].tool, "mtk");
+  assert.match(scan.warnings[0].message, /^MTK DRDI decode failed: /);
+  assert.equal(
+    posted.filter((m) => m.type === "records" && m.fileIndex === 1).length, 0,
+    "a successful unwrap consumes the parts even when the decode yields nothing",
+  );
+  globalThis.self.onmessage({ data: { type: "release" } });
+  await delay(20);
+});
+
+test("worker: an evicted parts bundle re-unwraps from the registered part files (cold open)", async () => {
+  // The three bundles carry identical content, so the persistent table cache
+  // (keyed by record sha256) must be emptied first or every open below is a
+  // cache hit and the cold path never runs.
+  globalThis.self.onmessage({ data: { type: "clearCache" } });
+  await delay(30);
+  const fixture = buildGridImage();
+  const bundles = [[901, 902], [911, 912], [921, 922]];
+  const scans = [];
+  for (let b = 0; b < bundles.length; b++) {
+    const [romId, drdiId] = bundles[b];
+    scans.push(await request(
+      {
+        type: "scan", id: 30 + b, files: [
+          { sourceId: romId, file: new File([fixture.rom], "md1rom.bin") },
+          { sourceId: drdiId, file: new File([fixture.drdi], "md1drdi.bin") },
+        ],
+      },
+      (m) => m.type === "records" && m.fileIndex === 0,
+      30000,
+    ));
+  }
+  // The image memo holds at most 2 bundles: opening the first bundle's card
+  // again (after its parse entry was evicted by the later bundles) must
+  // re-unwrap from the REGISTERED part files, not fail on a single-file unwrap.
+  const before = workerModule.getDebugCounters();
+  const tablesReply = await request(
+    { type: "parseCard", id: 301, sourceId: bundles[0][0], fileIndex: 0, record: scans[0].records[0] },
+    (m) => m.type === "tables" && m.id === 301,
+    30000,
+  );
+  assert.ok(isValidTablesShape(tablesReply.tables));
+  const after = workerModule.getDebugCounters();
+  assert.equal(after.unwrapMtk, before.unwrapMtk + 1, "the cold open re-unwraps the bundle once");
+  globalThis.self.onmessage({ data: { type: "release" } });
+  await delay(20);
 });

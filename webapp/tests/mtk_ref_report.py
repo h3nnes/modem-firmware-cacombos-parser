@@ -46,6 +46,25 @@ def combo_line(combo):
 
 
 is_tensor = isinstance(active, U.TensorCdfLoader)
+
+
+def with_nr_sa(counts, combos):
+    """gui_family_counts with the NR-SA presentation column the webapp added.
+
+    The reference parser's gui_family_counts predates the NR-SA split, so the
+    ref script derives it itself with the same rule the JS uses: an NR row is
+    "NR SA" when it is not an FR1/FR2 mix and decodes exactly one physical CC
+    (nrca = nr - nrdc - nr_sa). Key order matches guiFamilyCounts() in
+    webapp/js/lib/mtk_universal.js: endc, nr_sa, nrca, nrdc, lte.
+    """
+    endc, nr, lte = U.export.classify(combos, 1)
+    nrdc = sum(any(c.band < 257 for c in row.nr) and any(c.band >= 257 for c in row.nr)
+               for row in nr)
+    nr_sa = sum(row.nr_physical_ccs == 1 for row in nr)
+    return {"endc": counts["endc"], "nr_sa": nr_sa, "nrca": len(nr) - nrdc - nr_sa,
+            "nrdc": counts["nrdc"], "lte": counts["lte"]}
+
+
 out = {
     "loader": active.name,
     "loader_selection": attempts,
@@ -75,4 +94,12 @@ out = {
         "\n".join(combo_line(c) for c in rows).encode()).hexdigest()
         for p, rows in per_profile.items()},
 }
+
+for profile in out["profiles"]:
+    combos = per_profile[profile["profile"]]
+    profile["gui_counts"] = with_nr_sa(profile["gui_counts"], combos)
+for item in out["secondary_profiles"]:
+    combos = U._secondary_combos(next(s for s in secondary if s.profile == item["profile"]))
+    item["gui_counts"] = with_nr_sa(item["gui_counts"], combos)
+out["gui_counts"] = with_nr_sa(out["gui_counts"], union)
 json.dump(out, sys.stdout)

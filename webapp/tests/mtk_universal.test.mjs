@@ -220,7 +220,7 @@ test("mtk universal: unterminated legacy14 is refused, dual families are refused
   noTerm.set(new Uint8Array([9, 9]), BW_FAMILIES.legacy14.length * 2);
   assert.throws(() => discoverRomTables(noTerm, new Reporter()), (e) => {
     assert.ok(e instanceof UniversalError);
-    assert.equal(e.message, "no known MTK bandwidth enum found in md1rom. Known families: modern20(20 entries), legacy14(14 entries). A new family must be added explicitly rather than inferred.");
+    assert.equal(e.message, "no known MTK bandwidth enum found in md1rom. Known families: modern20(20 entries), legacy14(14 entries), nr15_13(13 entries). A new family must be added explicitly rather than inferred.");
     return true;
   });
   // Both full families in one rom is ambiguous.

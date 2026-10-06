@@ -94,8 +94,8 @@ import {
   generateAppleTables,
   exportAppleDiag,
 } from "./lib/apple_cr.js";
-import { unwrapBytes } from "./lib/mtk_containers.js";
-import { decodeMtkSummary, mtkCardCombos } from "./lib/mtk_scan.js";
+import { unwrapBytes, unwrapFiles, role as mtkPartRole, UnwrapError } from "./lib/mtk_containers.js";
+import { decodeMtkSummary, mtkCardCombos, scanMtkParts } from "./lib/mtk_scan.js";
 import { Reporter } from "./lib/mtk_universal.js";
 import { generateMtkTables } from "./lib/mtk_tables.js";
 import { buildB0cdText, buildB826CombinedText } from "./lib/mtk_export.js";
@@ -160,8 +160,14 @@ const appleMemberMemo = new Map(); // sourceId -> Map<memberName, Promise<Uint8A
 // {combos, lteCombos} derivation (fresh allocations for Tensor secondary and
 // bank-only profiles), evictable without touching the shared image state.
 const MTK_IMAGE_RETAINED = 2; // ~100 MB decompressed per source — bound like the apple banks
-const mtkImageMemo = new Map(); // sourceId -> { parts, summary } (insertion = LRU order)
+const mtkImageMemo = new Map(); // memoKey -> { parts, summary } (insertion = LRU order); keys are
+// a sourceId for single images or a sorted-sourceId bundle key for parts sets
 const mtkParseMemo = new Map(); // sourceId -> Map<key, {combos, lteCombos}>
+// Multi-file parts bundles: first-part sourceId -> { key, label, parts:
+// [{sourceId, name, dir}] }. Lets a card open resolve its bundle memo through
+// mtkMemoKeyFor and re-unwrap from the registered part files when the LRU
+// dropped the seeded entry (cold open). Cleared by handleRelease.
+const mtkPartsRegistry = new Map();
 
 // Step 3: retained scan-time candidate bytes. The scan already read (and
 // hashed) every candidate; seeding parseMemo with those exact bytes means the
@@ -547,13 +553,21 @@ async function ensureAppleParsed(sourceId, fileIndex, record) {
 
 // --- MTK DRDI card open ------------------------------------------------------------
 
+// Memo key for a card's source: a parts bundle's records all reference the
+// FIRST part's sourceId, and their shared image state lives under the bundle
+// key (sorted sourceId join) inside the same LRU as single images.
+function mtkMemoKeyFor(sourceId) {
+  const bundle = mtkPartsRegistry.get(sourceId);
+  return bundle ? bundle.key : sourceId;
+}
+
 // Image state for a sourceId: the scan seeds mtkImageMemo (onMtkImage hook);
 // a miss re-unwraps + re-decodes lazily. Bounded by its own small LRU —
 // entries are per-source and every card of a source shares one, so the
 // retainedParses cap (per card) would thrash a shared entry.
-function seedMtkImage(sourceId, parts, summary) {
-  mtkImageMemo.delete(sourceId); // re-seed moves the entry to the LRU end
-  mtkImageMemo.set(sourceId, { parts, summary });
+function seedMtkImage(memoKey, parts, summary) {
+  mtkImageMemo.delete(memoKey); // re-seed moves the entry to the LRU end
+  mtkImageMemo.set(memoKey, { parts, summary });
   while (mtkImageMemo.size > MTK_IMAGE_RETAINED) {
     const [oldest] = mtkImageMemo.entries().next().value;
     mtkImageMemo.delete(oldest);
@@ -561,11 +575,28 @@ function seedMtkImage(sourceId, parts, summary) {
 }
 
 async function ensureMtkImage(sourceId) {
-  const memo = mtkImageMemo.get(sourceId);
+  const memoKey = mtkMemoKeyFor(sourceId);
+  const memo = mtkImageMemo.get(memoKey);
   if (memo) {
-    mtkImageMemo.delete(sourceId);
-    mtkImageMemo.set(sourceId, memo); // LRU touch
+    mtkImageMemo.delete(memoKey);
+    mtkImageMemo.set(memoKey, memo); // LRU touch
     return memo;
+  }
+  const bundle = mtkPartsRegistry.get(sourceId);
+  if (bundle) {
+    // Cold open for a parts bundle: the scan normally seeded the memo, but a
+    // small LRU (cap 2) may have dropped it. Re-read the registered part
+    // files and re-unwrap — never re-unwrap a single part file alone.
+    bump("unwrapMtk");
+    const files = [];
+    for (const part of bundle.parts) {
+      const { source } = sourceEntry(part.sourceId);
+      files.push({ name: part.name, data: await source.read(0, source.size), dir: part.dir });
+    }
+    const parts = await unwrapFiles(files, bundle.label);
+    const summary = await decodeMtkSummary(parts, new Reporter());
+    seedMtkImage(memoKey, parts, summary);
+    return mtkImageMemo.get(memoKey);
   }
   const { file, source } = sourceEntry(sourceId);
   bump("unwrapMtk");
@@ -664,13 +695,14 @@ async function exportMtkFiles(sourceId, fileIndex, record, format) {
     return [{ filename: `${stem}_all_combos.json`, text }];
   }
   if (format === "csv" || format === "webcsv") {
-    // Same shape as the apple arm: both formats write the four viewer tables
-    // through the shared toCsvText writer.
+    // Same shape as the apple arm: both formats write the viewer tables
+    // through the shared toCsvText writer. The MTK envelope carries the extra
+    // NR-SA table (single-carrier NR rows); the apple arm has no such rows.
     bump("generateMtkTables");
     const tables = generateMtkTables(parsed.combos, parsed.lteCombos);
-    const names = { lte_ca: "lteca", nr_ca: "nrca", endc: "endc", nrdc: "nrdc" };
+    const names = { lte_ca: "lteca", nr_sa: "nrsa", nr_ca: "nrca", endc: "endc", nrdc: "nrdc" };
     const files = [];
-    for (const table of ["lte_ca", "nr_ca", "endc", "nrdc"]) {
+    for (const table of ["lte_ca", "nr_sa", "nr_ca", "endc", "nrdc"]) {
       if (!tables[table] || tables[table].length === 0) continue;
       const text = toCsvText(tables[table]);
       if (text !== null) files.push({ filename: `${stem}_${names[table]}.csv`, text });
@@ -731,15 +763,104 @@ async function handleScan(msg) {
   session = { scanId: msg.id };
   const { id, files } = msg;
   const total = files.length;
+  // MediaTek extracted parts (md1rom / md1drdi / md1drdi_hdr / md1drdi_data)
+  // only make sense together: role-named files are grouped per folder
+  // namespace (webkitRelativePath path; a plain multi-select without one is a
+  // single implied root) and unwrapped as one modem each, posted under the
+  // FIRST part's fileIndex. Only files consumed by a SUCCESSFUL bundle are
+  // skipped by the per-file loop below: a failed parts attempt (incomplete
+  // set, more than one distinct set in a folder, limit exceeded) falls back
+  // to the normal per-file scan with a warning, so a role-named file can
+  // never vanish silently.
+  const consumed = new Set(); // fileIndex handled by a successful parts bundle
+  const partsFailureWarnings = new Map(); // fileIndex -> warning delivered with its per-file reply
+  const mtkPartIndexes = [];
+  files.forEach((entry, i) => {
+    if (mtkPartRole(entry.file.name)) mtkPartIndexes.push(i);
+  });
+  for (const i of mtkPartIndexes) {
+    if (!sources.has(files[i].sourceId)) {
+      sources.set(files[i].sourceId, { file: files[i].file, source: new CachedSource(new BrowserFileSource(files[i].file)) });
+    }
+  }
+  if (mtkPartIndexes.length && !cancelled.has(id)) {
+    const groups = new Map(); // dir -> [fileIndex]
+    for (const i of mtkPartIndexes) {
+      const dir = (files[i].file.webkitRelativePath || "").split("/").slice(0, -1).join("/");
+      if (!groups.has(dir)) groups.set(dir, []);
+      groups.get(dir).push(i);
+    }
+    // Shallowest namespaces first (mirrors unwrapFiles' per-directory order).
+    const dirs = [...groups.keys()].sort((a, b) =>
+      a.split("/").length - b.split("/").length || (a < b ? -1 : a > b ? 1 : 0));
+    for (const dir of dirs) {
+      if (cancelled.has(id)) break;
+      const indexes = groups.get(dir);
+      const first = indexes[0];
+      const firstSourceId = files[first].sourceId;
+      const label = dir ? dir.split("/").pop() : "MediaTek parts";
+      post({ type: "progress", phase: "scan", source: label, done: first, total, currentFile: label, detail: "MediaTek parts" });
+      try {
+        const entries = indexes.map((i) => ({ sourceId: files[i].sourceId, file: files[i].file }));
+        const parts = await unwrapFiles(
+          await Promise.all(indexes.map(async (i) => ({
+            name: files[i].file.name,
+            dir,
+            data: await sources.get(files[i].sourceId).source.read(0, files[i].file.size),
+          }))),
+          label,
+        );
+        let seeded = null;
+        const scan = await scanMtkParts(parts, label, () => cancelled.has(id), {
+          onScanProgress: (info) => {
+            if (cancelled.has(id)) return;
+            const detail = info.stage === "mtk" ? `decoding ${info.done}/${info.total}` : "";
+            post({ type: "progress", phase: "scan", source: label, done: first, total, currentFile: label, detail });
+          },
+          // The decode just ran: hand parts + summary over for the bundle memo.
+          onMtkImage: (p, summary) => {
+            seeded = { parts: p, summary };
+          },
+        });
+        if (cancelled.has(id)) break;
+        const bundleKey = entries.map((e) => e.sourceId).sort((a, b) => a - b).join("|");
+        mtkPartsRegistry.set(firstSourceId, {
+          key: bundleKey,
+          label,
+          parts: entries.map((e) => ({ sourceId: e.sourceId, name: e.file.name, dir })),
+        });
+        if (seeded) seedMtkImage(bundleKey, seeded.parts, seeded.summary);
+        // A bundle that unwraps but yields nothing must never be a silent pass.
+        let warnings = scan.warnings;
+        if (!scan.records.length && !warnings.length) {
+          warnings = [{ tool: "mtk", message: `MediaTek parts bundle ${label} produced no card records — skipped` }];
+        }
+        if (!cancelled.has(id)) post({ type: "records", fileIndex: first, records: scan.records, warnings });
+        for (const i of indexes) consumed.add(i);
+      } catch (err) {
+        if (err instanceof ScanCancelled || cancelled.has(id)) break;
+        // Failure path: every file of this folder goes back to the per-file
+        // loop (qcom/apple/mtk-single) exactly as if it had never been routed.
+        partsFailureWarnings.set(first, {
+          tool: "mtk",
+          message: `MediaTek parts unwrap failed: ${err && err.message ? err.message : String(err)} — scanned per file instead`,
+        });
+      }
+    }
+  }
   for (let fileIndex = 0; fileIndex < total; fileIndex++) {
     if (cancelled.has(id)) break;
+    if (consumed.has(fileIndex)) continue;
     // Registration: each entry is { sourceId, file }. The File is structured-
     // cloned once here and kept in `sources`; every later request carries only
     // the stable id, so the per-source memos actually hit across messages.
+    // (Parts files were registered pre-loop; never clobber that entry.)
     const entry = files[fileIndex];
     const sourceId = entry.sourceId;
     const file = entry.file;
-    sources.set(sourceId, { file, source: new CachedSource(new BrowserFileSource(file)) });
+    if (!sources.has(sourceId)) {
+      sources.set(sourceId, { file, source: new CachedSource(new BrowserFileSource(file)) });
+    }
     post({ type: "progress", phase: "scan", source: file.name, done: fileIndex, total, currentFile: file.name });
     try {
       let postedWarnings = 0; // partial batches already delivered these
@@ -787,7 +908,8 @@ async function handleScan(msg) {
         onMtkImage: (parts, summary) => seedMtkImage(sourceId, parts, summary),
       });
       if (cancelled.has(id)) break;
-      post({ type: "records", fileIndex, records, warnings: warnings.slice(postedWarnings) });
+      post({ type: "records", fileIndex, records, warnings: warnings.slice(postedWarnings)
+        .concat(partsFailureWarnings.has(fileIndex) ? [partsFailureWarnings.get(fileIndex)] : []) });
     } catch (err) {
       if (err instanceof ScanCancelled || cancelled.has(id)) break;
       post({ type: "error", message: err && err.message ? err.message : String(err), source: file.name });
@@ -971,6 +1093,7 @@ function handleRelease() {
   appleMemberMemo.clear();
   mtkImageMemo.clear();
   mtkParseMemo.clear();
+  mtkPartsRegistry.clear();
   retainedBytes.clear();
   parsedInflight.clear();
   retainedParses.clear();

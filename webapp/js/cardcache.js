@@ -34,6 +34,8 @@ const tablesKeyOf = (key) => TABLES_PREFIX + key.slice(META_PREFIX.length);
 // cache corruption (a poisoned or stale-writer entry) and must never reach the
 // viewer, which would render "Empty"/"0 combos" forever.
 const TABLE_KEYS = ["lte_ca", "nr_ca", "endc", "nrdc"];
+// Present only for MediaTek cards (single-carrier NR rows); validated when present.
+const OPTIONAL_TABLE_KEYS = ["nr_sa"];
 
 export function isValidTablesShape(tables) {
   if (!tables || typeof tables !== "object" || Array.isArray(tables)) return false;
@@ -44,12 +46,19 @@ export function isValidTablesShape(tables) {
       if (!row || typeof row !== "object" || Array.isArray(row)) return false;
     }
   }
+  for (const key of OPTIONAL_TABLE_KEYS) {
+    if (tables[key] === undefined) continue;
+    if (!Array.isArray(tables[key])) return false;
+    for (const row of tables[key]) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+    }
+  }
   return true;
 }
 
 function rowCountOf(tables) {
   let n = 0;
-  for (const key of TABLE_KEYS) n += tables[key]?.length ?? 0;
+  for (const key of [...TABLE_KEYS, ...OPTIONAL_TABLE_KEYS]) n += tables[key]?.length ?? 0;
   return n;
 }
 

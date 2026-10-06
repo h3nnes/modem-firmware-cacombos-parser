@@ -1,11 +1,12 @@
 // Stage-A + Stage-B port of mtk-drdi-combo-parser/mtk_universal.py:
 // module constants, Reporter, ROM dictionary discovery, Image/Bank records,
-// GridLoader (modern 12-byte descriptor matrix) and TensorCdfLoader (split
-// CDF) from Stage A; from Stage B the shared combo row model, the grammar
-// parser (CandidateNode/descriptor decode), FeatureResolver, profile decode,
-// the LTE CA row-table scanners, supported-band lists and the Tensor
-// secondary bank-8 decoder (mtk_tensor_secondary.py). Scan orchestration
-// lives in mtk_scan.js; the flat/MD800 loader and numpy paths are NOT ported.
+// GridLoader (modern 12-byte descriptor matrix), FlatLoader (MD800 legacy
+// pointer-run family) and TensorCdfLoader (split CDF) from Stage A; from
+// Stage B the shared combo row model, the grammar parser
+// (CandidateNode/descriptor decode), FeatureResolver, profile decode, the
+// LTE CA row-table scanners, supported-band lists and the Tensor secondary
+// bank-8 decoder (mtk_tensor_secondary.py). Scan orchestration lives in
+// mtk_scan.js; the NR15 family (mtk_nr15.py) lives in mtk_nr15.js.
 //
 // Scalar loops only (no numpy); the numpy prefilter variants of the python
 // collapse into the same bounds-checked scalar scans.
@@ -32,6 +33,11 @@ export const VERSION = "0.4-universal";
 export const BW_FAMILIES = {
   modern20: [5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 200, 400, 35, 45, 70, 90, 800, 1600, 2000],
   legacy14: [5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 90, 100, 200, 400],
+  // NR15 (MT6833/MT6877) firmware stores the enum as (index, u16 bandwidth)
+  // pairs with a count terminator instead of a plain u16 run, so a plain
+  // nr15_13 match can only succeed where the terminator byte holds — it can
+  // never collide with a modern20/legacy14 site (their 14th entry is nonzero).
+  nr15_13: [5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 200, 400],
 };
 export const BW20 = BW_FAMILIES.modern20;
 
@@ -92,6 +98,42 @@ export function findAll(buf, pat, limit = null) {
     start = p + 1;
   }
   return out;
+}
+
+// np.frombuffer(buf, "<u4", count=len//4): little-endian words from `offset`.
+// Aligned views on little-endian platforms borrow the underlying buffer;
+// anything else falls back to an explicit byte-compose copy.
+export function wordsOf(buf, offset = 0, count = Math.floor((buf.length - offset) / 4)) {
+  if (count <= 0) return new Uint32Array(0);
+  if (LITTLE_ENDIAN) {
+    if ((buf.byteOffset + offset) % 4 === 0) {
+      return new Uint32Array(buf.buffer, buf.byteOffset + offset, count);
+    }
+    const copy = new Uint8Array(count * 4);
+    copy.set(buf.subarray(offset, offset + count * 4));
+    return new Uint32Array(copy.buffer);
+  }
+  const out = new Uint32Array(count);
+  for (let i = 0; i < count; i++) out[i] = u32(buf, offset + i * 4);
+  return out;
+}
+
+export function packU32(v) {
+  return new Uint8Array([v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]);
+}
+
+// NR15 firmware's indexed bandwidth-enum spelling: (index, u16 bandwidth)
+// pairs followed by the entry count as a u32 terminator.
+export function nr15Pattern() {
+  const tbl = BW_FAMILIES.nr15_13;
+  const pat = new Uint8Array(tbl.length * 4 + 4);
+  tbl.forEach((bw, i) => {
+    pat[i * 4] = i;
+    pat[i * 4 + 2] = bw & 0xff;
+    pat[i * 4 + 3] = (bw >>> 8) & 0xff;
+  });
+  pat[tbl.length * 4] = tbl.length;
+  return pat;
 }
 
 // Little-endian word views for hot scalar scans. Typed arrays use the
@@ -233,6 +275,12 @@ export function bwSites(rom) {
       }
       out.push([fam, o, tbl]);
     }
+  }
+  // NR15 firmware stores the enum as (index, u16 bandwidth) pairs; only
+  // consult that spelling when no plain u16 family matched anywhere.
+  if (!out.length) {
+    const tbl = BW_FAMILIES.nr15_13;
+    for (const o of findAll(rom, nr15Pattern())) out.push(["nr15_13", o, tbl]);
   }
   return out;
 }
@@ -499,6 +547,84 @@ function containsBytes(hay, needle, start, end) {
 
 // ---------------------------------------------------------------------------
 
+// GridLoader._discover, shared with the NR15 loader (mtk_nr15.js): builds
+// loader.banks from a raw descriptor-hit list on any loader carrying
+// { drdi, rep, banks }.
+export function gridDiscover(loader, raw) {
+  if (!raw.length) throw new UniversalError("no modern bank descriptors found");
+  // Dense cluster: real table is 12-byte-stride but small gaps can exist in false scans.
+  const clusters = [];
+  let cur = [raw[0]];
+  for (let i = 1; i < raw.length; i++) {
+    const a = raw[i - 1];
+    const b = raw[i];
+    if (0 < b[0] - a[0] && b[0] - a[0] <= 0x40) cur.push(b);
+    else {
+      if (cur.length >= 4) clusters.push(cur);
+      cur = [b];
+    }
+  }
+  if (cur.length >= 4) clusters.push(cur);
+  if (!clusters.length) throw new UniversalError("raw bank-descriptor hits did not form a coherent table");
+  // max(clusters, key=len): python max returns the first maximal element.
+  let table = clusters[0];
+  for (const c of clusters) if (c.length > table.length) table = c;
+  // Require a uniform matrix: each distinct bank VA has same declared column count.
+  const byVa = new Map();
+  for (const x of table) {
+    if (!byVa.has(x[2])) byVa.set(x[2], []);
+    byVa.get(x[2]).push(x);
+  }
+  // Counter.most_common(1)[0]: max count, ties keep first-encountered order.
+  const counts = new Map();
+  for (const xs of byVa.values()) counts.set(xs.length, (counts.get(xs.length) ?? 0) + 1);
+  let colCount = -1;
+  let freq = -1;
+  for (const [k, v] of counts) {
+    if (v > freq) { freq = v; colCount = k; }
+  }
+  const coherent = new Map();
+  for (const [va, xs] of byVa) if (xs.length === colCount) coherent.set(va, xs);
+  if (coherent.size < 1) throw new UniversalError("descriptor table does not contain a coherent bank/profile matrix");
+
+  loader.descriptor_table_off = table[0][0];
+  loader.columns = colCount;
+  loader.banks = [];
+  const bankVas = [...coherent.keys()].sort((a, b) => {
+    let ma = Infinity;
+    let mb = Infinity;
+    for (const x of coherent.get(a)) if (x[0] < ma) ma = x[0];
+    for (const x of coherent.get(b)) if (x[0] < mb) mb = x[0];
+    return ma - mb;
+  });
+  for (let bi = 0; bi < bankVas.length; bi++) {
+    const va = bankVas[bi];
+    const xs = coherent.get(va).slice().sort((a, b) => a[0] - b[0]);
+    const images = [];
+    let seenStub = false;
+    for (let pi = 0; pi < xs.length; pi++) {
+      const src = xs[pi][1];
+      const ln = xs[pi][3];
+      if (ln <= 0x40) {
+        seenStub = true;
+        continue;
+      }
+      if (seenStub) {
+        // Live profiles are a contiguous prefix by observed MTK contract.
+        throw new UniversalError(`bank ${hex(va)} has live profile ${pi} after a stub; descriptor geometry is likely wrong`);
+      }
+      images.push(new Image(va, pi, src, ln, va - src, loader.drdi, `bank${bi}/profile${pi}`));
+    }
+    loader.banks.push(new Bank(va, images, bi));
+  }
+  loader.rep.info("grid_loader", "discovered modern bank/profile descriptor matrix", {
+    descriptor_table_off: hex(loader.descriptor_table_off),
+    columns: loader.columns,
+    banks: loader.banks.length,
+    live_counts: loader.banks.map((b) => b.images.length),
+  });
+}
+
 // Modern {source_field, bank_va, bank_len} 12-byte descriptor matrix.
 export class GridLoader extends BaseLoader {
   name = "grid";
@@ -544,79 +670,7 @@ export class GridLoader extends BaseLoader {
   }
 
   _discover(descriptorHits = null) {
-    const raw = descriptorHits ?? GridLoader.descriptorHits(this.rom, this.drdi);
-    if (!raw.length) throw new UniversalError("no modern bank descriptors found");
-    // Dense cluster: real table is 12-byte-stride but small gaps can exist in false scans.
-    const clusters = [];
-    let cur = [raw[0]];
-    for (let i = 1; i < raw.length; i++) {
-      const a = raw[i - 1];
-      const b = raw[i];
-      if (0 < b[0] - a[0] && b[0] - a[0] <= 0x40) cur.push(b);
-      else {
-        if (cur.length >= 4) clusters.push(cur);
-        cur = [b];
-      }
-    }
-    if (cur.length >= 4) clusters.push(cur);
-    if (!clusters.length) throw new UniversalError("raw bank-descriptor hits did not form a coherent table");
-    // max(clusters, key=len): python max returns the first maximal element.
-    let table = clusters[0];
-    for (const c of clusters) if (c.length > table.length) table = c;
-    // Require a uniform matrix: each distinct bank VA has same declared column count.
-    const byVa = new Map();
-    for (const x of table) {
-      if (!byVa.has(x[2])) byVa.set(x[2], []);
-      byVa.get(x[2]).push(x);
-    }
-    // Counter.most_common(1)[0]: max count, ties keep first-encountered order.
-    const counts = new Map();
-    for (const xs of byVa.values()) counts.set(xs.length, (counts.get(xs.length) ?? 0) + 1);
-    let colCount = -1;
-    let freq = -1;
-    for (const [k, v] of counts) {
-      if (v > freq) { freq = v; colCount = k; }
-    }
-    const coherent = new Map();
-    for (const [va, xs] of byVa) if (xs.length === colCount) coherent.set(va, xs);
-    if (coherent.size < 1) throw new UniversalError("descriptor table does not contain a coherent bank/profile matrix");
-
-    this.descriptor_table_off = table[0][0];
-    this.columns = colCount;
-    this.banks = [];
-    const bankVas = [...coherent.keys()].sort((a, b) => {
-      let ma = Infinity;
-      let mb = Infinity;
-      for (const x of coherent.get(a)) if (x[0] < ma) ma = x[0];
-      for (const x of coherent.get(b)) if (x[0] < mb) mb = x[0];
-      return ma - mb;
-    });
-    for (let bi = 0; bi < bankVas.length; bi++) {
-      const va = bankVas[bi];
-      const xs = coherent.get(va).slice().sort((a, b) => a[0] - b[0]);
-      const images = [];
-      let seenStub = false;
-      for (let pi = 0; pi < xs.length; pi++) {
-        const src = xs[pi][1];
-        const ln = xs[pi][3];
-        if (ln <= 0x40) {
-          seenStub = true;
-          continue;
-        }
-        if (seenStub) {
-          // Live profiles are a contiguous prefix by observed MTK contract.
-          throw new UniversalError(`bank ${hex(va)} has live profile ${pi} after a stub; descriptor geometry is likely wrong`);
-        }
-        images.push(new Image(va, pi, src, ln, va - src, this.drdi, `bank${bi}/profile${pi}`));
-      }
-      this.banks.push(new Bank(va, images, bi));
-    }
-    this.rep.info("grid_loader", "discovered modern bank/profile descriptor matrix", {
-      descriptor_table_off: hex(this.descriptor_table_off),
-      columns: this.columns,
-      banks: this.banks.length,
-      live_counts: this.banks.map((b) => b.images.length),
-    });
+    gridDiscover(this, descriptorHits ?? GridLoader.descriptorHits(this.rom, this.drdi));
   }
 
   // Preserve the existing ranking as a search order, but require grammar
@@ -820,6 +874,231 @@ export class TensorCdfLoader extends BaseLoader {
 TensorCdfLoader.ALIAS = 0x60000000;
 
 // ---------------------------------------------------------------------------
+// Flat (MD800-class) legacy container: no 12-byte bank descriptor matrix
+// (python mtk_universal.FlatLoader). Profiles are regions of md1drdi, each
+// mounted at its own relocation; the geometry is recovered from two structural
+// facts: a profile's CandidateNode pointer array is a maximal run of runtime-
+// window words whose node objects immediately follow it (4-byte bias), and the
+// shared grammar must then close on the adjacency-derived relocation — a wrong
+// relocation produces essentially zero valid nodes, so the sample proof below
+// is a proof rather than a fit.
+// ---------------------------------------------------------------------------
+
+function runsFromWords(words, minrun) {
+  const out = [];
+  let start = -1;
+  let prev = -1;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w >= VA_LO && w < VA_HI) {
+      if (start < 0) start = i;
+      else if (i !== prev + 1) {
+        if (prev - start + 1 >= minrun) out.push([start * 4, prev - start + 1]);
+        start = i;
+      }
+      prev = i;
+    }
+  }
+  if (start >= 0 && prev - start + 1 >= minrun) out.push([start * 4, prev - start + 1]);
+  return out;
+}
+
+export class FlatLoader extends BaseLoader {
+  name = "flat";
+
+  static MIN_ARRAY = 64;
+  static SAMPLE = 48;
+  static SAMPLE_RATE = 0.9;
+
+  static probe(drdi) {
+    return runsFromWords(wordsOf(drdi), FlatLoader.MIN_ARRAY).length;
+  }
+
+  constructor(rom, drdi, rep) {
+    super(rom, drdi, rep);
+    this._words = wordsOf(drdi);
+    this.runs = runsFromWords(this._words, FlatLoader.MIN_ARRAY);
+    this._discover();
+  }
+
+  _probeImage(reloc) {
+    return new Image(reloc, -1, 0, this.drdi.length, reloc, this.drdi, "flat-probe");
+  }
+
+  // Relocation hypotheses for one pointer run, cheapest first: nodes
+  // immediately follow the array; the 4-byte bias is the observed packing on
+  // every MD800 profile examined, with the no-bias variant kept so a repack
+  // does not silently defeat discovery.
+  *_hypotheses(off, n) {
+    const v0 = this._words[off / 4];
+    for (const bias of [4, 0]) {
+      const r = v0 - (off + 4 * n + bias);
+      if (r > 0 && r < VA_HI && r + this.drdi.length < 2 ** 32) yield [r, bias];
+    }
+  }
+
+  _discover() {
+    const parser = new GrammarParser(this, this.rep);
+    const found = [];
+    for (const [off, n] of this.runs) {
+      for (const [reloc, bias] of this._hypotheses(off, n)) {
+        const im = this._probeImage(reloc);
+        const k = Math.min(n, FlatLoader.SAMPLE);
+        let ok = 0;
+        for (let i = 0; i < k; i++) {
+          if (parser.parseCandidateVa(im, this._words[off / 4 + i]) !== null) ok++;
+        }
+        if (ok >= k * FlatLoader.SAMPLE_RATE) {
+          found.push({ array_off: off, count: n, relocation: reloc, bias, array_va: off + reloc });
+          break;
+        }
+      }
+    }
+    if (!found.length) {
+      throw new UniversalError(
+        `flat loader found no pointer run whose adjacency-derived relocation yields `
+        + `structurally valid CandidateNodes (scanned ${this.runs.length} runs of >=${FlatLoader.MIN_ARRAY} words)`,
+      );
+    }
+
+    const [order, tableOff] = this._romProfileOrder(found.map((f) => f.array_va));
+    if (order) {
+      const rank = (f) => (order.has(f.array_va) ? order.get(f.array_va) : 10000);
+      found.sort((a, b) => rank(a) - rank(b));
+      for (const f of found) f.profile = order.has(f.array_va) ? order.get(f.array_va) : null;
+    }
+    // The ROM table can name the same runtime array twice; vendor numbering is
+    // kept when present, but every image needs a unique profile key.
+    const used = new Set();
+    let nxt = Math.max(...found.map((f) => f.profile || 0)) + 1;
+    for (const f of found) {
+      let v = f.profile ?? null;
+      if (v === null || used.has(v)) v = nxt++;
+      used.add(v);
+      f.profile = v;
+    }
+    const images = found.map((f) => new Image(
+      f.relocation, f.profile, 0, this.drdi.length, f.relocation, this.drdi,
+      `flat/profile${f.profile}`, 0, [f.array_off, f.count],
+    ));
+    this.banks = [new Bank(Math.min(...found.map((f) => f.array_va)), images, 0)];
+    this.discovery = found;
+    this.rom_profile_table_off = tableOff;
+    this.rep.info("flat_loader", "recovered flat capability profiles by relocation proof", {
+      profiles: found.length,
+      rom_profile_table: tableOff === null ? null : hex(tableOff),
+      corroborated: order ? found.filter((f) => order.has(f.array_va)).length : 0,
+      detail: found.map((f) => ({
+        profile: f.profile,
+        array_off: hex(f.array_off),
+        count: f.count,
+        relocation: hex(f.relocation),
+        array_va: hex(f.array_va),
+        bias: f.bias,
+      })),
+    });
+  }
+
+  // Corroborate the recovered arrays against md1rom's profile pointer table:
+  // the longest consecutive run of ROM words that all equal recovered array
+  // addresses supplies the vendor's own profile numbering.
+  _romProfileOrder(arrayVas) {
+    // numpy: np.fromiter(sorted(want), "<u8").astype("<u4") wraps to 32 bits.
+    const want = new Set(arrayVas.map((v) => v >>> 0));
+    if (!want.size) return [null, null];
+    const rw = wordsOf(this.rom);
+    const idx = [];
+    for (let i = 0; i < rw.length; i++) if (want.has(rw[i])) idx.push(i);
+    if (!idx.length) return [null, null];
+    // Longest run of consecutive word indexes all holding a wanted address.
+    let best = [0, 0, 0];
+    let start = idx[0];
+    let prev = idx[0];
+    for (const z of [...idx.slice(1), null]) {
+      if (z !== prev + 1) {
+        const ln = prev - start + 1;
+        if (ln > best[0]) best = [ln, start, prev];
+        if (z === null) break;
+        start = z;
+      }
+      prev = z;
+    }
+    const [ln, w0] = best;
+    if (ln < 2) return [null, null];
+    const order = new Map();
+    for (let i = 0; i < ln; i++) {
+      const va = rw[w0 + i];
+      if (!order.has(va)) order.set(va, i);
+    }
+    return [order, w0 * 4];
+  }
+
+  capabilityBank() {
+    const b = this.banks[0];
+    this.rep.info("capability_bank", "flat container exposes one synthetic capability bank", {
+      bank_va: hex(b.bank_va),
+      live_profiles: b.images.length,
+    });
+    return b;
+  }
+
+  // LTE CA rows in this family are a pointer array of row objects
+  // (parseLteFields at row bias 4/0), not contiguous row-table banks.
+  lteTables(cap, rep) {
+    const chosen = [];
+    for (const [off, n] of this.runs) {
+      for (const [reloc] of this._hypotheses(off, n)) {
+        const im = this._probeImage(reloc);
+        for (const rowBias of [4, 0]) {
+          let combos = [];
+          let okall = true;
+          const probe = Math.min(n, 32);
+          for (let i = 0; i < probe; i++) {
+            const base = im.resolve(this._words[off / 4 + i], 4);
+            if (base === null || parseLteFields(im, base + rowBias, this.tables) === null) {
+              okall = false;
+              break;
+            }
+          }
+          if (!okall) continue;
+          for (let i = 0; i < n; i++) {
+            const base = im.resolve(this._words[off / 4 + i], 4);
+            const cb = base === null ? null : parseLteFields(im, base + rowBias, this.tables);
+            if (cb === null) {
+              combos = [];
+              break;
+            }
+            combos.push(cb);
+          }
+          if (combos.length) {
+            chosen.push({ array_off: off, count: n, relocation: reloc, row_bias: rowBias, rows: combos });
+            break;
+          }
+        }
+        if (chosen.length && chosen[chosen.length - 1].array_off === off) break;
+      }
+    }
+    if (!chosen.length) {
+      rep.warn("lte_table_missing", "flat loader found no fully valid LTE CA pointer array");
+      return [null, new Map()];
+    }
+    chosen.sort((a, b) => b.rows.length - a.rows.length);
+    const results = new Map();
+    chosen.forEach((c, i) => results.set(i, c.rows));
+    rep.info("lte_table", "flat LTE CA row arrays recovered by relocation proof", {
+      arrays: chosen.map((c, i) => ({
+        index: i,
+        array_off: hex(c.array_off),
+        rows: c.rows.length,
+        relocation: hex(c.relocation),
+        row_bias: c.row_bias,
+      })),
+    });
+    return [this.banks[0], results];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Stage B: shared combo row model (mtk_export.Combo and friends). Field names
 // mirror the python dataclasses so the Stage D exporters serialize rows
 // without translation; dedup/classification semantics are python-exact.
@@ -908,13 +1187,19 @@ export function dedupExact(combos) {
   return out;
 }
 
-// Separate mixed FR1/FR2 NR-only rows for the GUI's NRDC column. This is a
-// band-based presentation classification, not proof of a separate firmware
-// RF_NRDC namespace; the export classification stays intact.
+// Separate mixed FR1/FR2 NR-only rows for the GUI's NRDC column and single-
+// carrier NR rows for the NR-SA column. These are band/CC-based presentation
+// classifications, not proof of separate firmware namespaces; the export
+// classification stays intact.
 export function guiFamilyCounts(combos) {
   const [endc, nr, lte] = classify(combos, 1);
-  const nrdc = nr.filter((row) => row.nr.some((c) => c.band < 257) && row.nr.some((c) => c.band >= 257)).length;
-  return { endc: endc.length, nrca: nr.length - nrdc, nrdc, lte: lte.length };
+  let nrdc = 0;
+  let nrSa = 0;
+  for (const row of nr) {
+    if (row.nr.some((c) => c.band < 257) && row.nr.some((c) => c.band >= 257)) nrdc++;
+    if (row.nr_physical_ccs === 1) nrSa++;
+  }
+  return { endc: endc.length, nr_sa: nrSa, nrca: nr.length - nrdc - nrSa, nrdc, lte: lte.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,7 +1395,42 @@ export class GrammarParser {
     return hit[1];
   }
 
+  // Summary info shared by both discovery paths (python shape, differential-
+  // pinned): the hinted path reports the same fields, with source flipped.
+  _candidateArrayInfo(im, off, rows, rawrun, source) {
+    let nrDesc = 0;
+    let lteDesc = 0;
+    for (const c of rows) {
+      if (c.nr !== null) nrDesc++;
+      if (c.lte !== null) lteDesc++;
+    }
+    return [off, rows, {
+      file_offset: off,
+      relative_offset: off - im.source_offset,
+      count: rows.length,
+      raw_pointer_run_count: rawrun,
+      nr_descriptors: nrDesc,
+      lte_descriptors: lteDesc,
+      invariant_pass: rows.length,
+      invariant_total: rows.length,
+      invariant_rate: 1.0,
+      source,
+    }];
+  }
+
   _findCandidateArray(im) {
+    // Flat/legacy loaders prove a profile's relocation while discovering it
+    // and hand the validated array in as a hint; every pointer is still
+    // re-validated here and the run trimmed to its maximal valid subrun.
+    if (im.candidate_hint) {
+      const [hoff, hn] = im.candidate_hint;
+      const best = this._validateRun(im, hoff, hn);
+      if (best === null) {
+        throw new UniversalError(`${im.label}: loader-supplied candidate array at ${hex(hoff)} (${hn} entries) contains no structurally valid CandidateNode subrun`);
+      }
+      const [ln, off, rows, rawrun] = best;
+      return this._candidateArrayInfo(im, off, rows, rawrun, "loader_hint");
+    }
     let best = null;
     const allValid = [];
     for (const [off, n] of this._pointerRuns(im, 4)) {
@@ -1133,25 +1453,7 @@ export class GrammarParser {
         { image: im.label, subrun_lengths: allValid.map((c) => c[0]).sort((a, b) => b - a).slice(0, 8) });
     }
     const [ln, off, rows, rawrun] = best;
-    let nrDesc = 0;
-    let lteDesc = 0;
-    for (const c of rows) {
-      if (c.nr !== null) nrDesc++;
-      if (c.lte !== null) lteDesc++;
-    }
-    // Exact invariant is already enforced per descriptor; summarize it explicitly.
-    return [off, rows, {
-      file_offset: off,
-      relative_offset: off - im.source_offset,
-      count: ln,
-      raw_pointer_run_count: rawrun,
-      nr_descriptors: nrDesc,
-      lte_descriptors: lteDesc,
-      invariant_pass: ln,
-      invariant_total: ln,
-      invariant_rate: 1.0,
-      source: "scan",
-    }];
+    return this._candidateArrayInfo(im, off, rows, rawrun, "scan");
   }
 }
 
@@ -1478,9 +1780,11 @@ export function establishFeaturePairs(states, rep) {
     const best = candidates[0];
     s.dl_table = best.dl;
     s.ul_table = best.ul;
+    // score[1] is -exact_lengths; when nothing is exact that is -0, which
+    // python serializes as 0 — normalize so the JSON differential stays exact.
     s.feature_detail = {
       ...best.detail,
-      score: best.score.slice(),
+      score: best.score.slice().map((v) => (v === 0 ? 0 : v)),
       order_hint: hint,
       dl_root_relative: best.dl.root_off - s.image.source_offset,
       ul_root_relative: best.ul.root_off - s.image.source_offset,

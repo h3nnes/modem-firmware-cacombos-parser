@@ -41,84 +41,142 @@ IMAGES = (
 
 # --- row schema (must stay byte-identical to js/lib/mtk_tables.js) -------------
 
-CLASS_LETTERS = "ABCDEFGHIJKL"
 FR2_MIN_BAND = 257
-UL_ABSENT_CELL = "—"  # LTE ul_class == 6 (absent uplink)
+FAMILY_KEYS = {"LTE": "lte_ca", "NR SA (1CC)": "nr_sa", "NR-CA": "nr_ca",
+               "EN-DC": "endc", "NRDC": "nrdc"}
 
 
-def class_letter(value):
-    return CLASS_LETTERS[value] if 0 <= value < len(CLASS_LETTERS) else f"class{value}"
+def class_label(value):
+    # main.py _class_name: letters for the observed range, [n] beyond.
+    return chr(65 + value) if 0 <= value < 26 else f"[{value}]"
 
 
-def lte_ul_cell(comp):
-    # LteComponent.has_ul: ul_class < LTE_UL_ABSENT (6)
-    return class_letter(comp.ul_class) if comp.ul_class < 6 else UL_ABSENT_CELL
+def family_for(combo):
+    """The reference viewer's presentation family (backend.js familyFor)."""
+    if combo.lte:
+        return "EN-DC" if combo.nr else "LTE"
+    if not combo.nr:
+        return None
+    if (any(c.band < FR2_MIN_BAND for c in combo.nr)
+            and any(c.band >= FR2_MIN_BAND for c in combo.nr)):
+        return "NRDC"
+    return "NR SA (1CC)" if combo.nr_physical_ccs == 1 else "NR-CA"
 
 
-def lte_token(comp):
-    return f"{comp.band}{class_letter(comp.dl_class)}"
+def ordered(components, ul=False):
+    """Qualcomm presentation: descending band/class order (stable sort)."""
+    return sorted(
+        (c for c in components if c.has_ul) if ul else list(components),
+        key=lambda c: (-c.band, -(c.ul_class if ul else c.dl_class)),
+    )
 
 
-def per_cc(values):
-    return "+".join("?" if v is None else str(v) for v in values)
+def bands(components, ul=False):
+    return " + ".join(
+        f"{c.band}{class_label(c.ul_class if ul else c.dl_class)}" for c in components)
 
 
-def join_cc(comps, pick):
-    return " + ".join(per_cc([pick(cc) for cc in comp.ccs]) for comp in comps)
+def values(vals):
+    return " + ".join("?" if v is None else str(v) for v in vals)
 
 
-def nr_cells(comps):
+def nr_values(components, field, ul=False):
+    out = []
+    for c in components:
+        for cc in c.ccs:
+            if not ul or cc.ul_mimo is not None:
+                out.append(getattr(cc, field))
+    return values(out)
+
+
+def nr_columns(dl, ul, prefix=""):
     return {
-        "SCS": join_cc(comps, lambda cc: cc.scs_khz),
-        "BW DL (MHz)": join_cc(comps, lambda cc: cc.dl_bw_mhz),
-        "MIMO DL": join_cc(comps, lambda cc: cc.dl_mimo),
-        "MIMO UL": join_cc(comps, lambda cc: cc.ul_mimo),
+        f"{prefix}MIMO DL": nr_values(dl, "dl_mimo"),
+        f"{prefix}SCS DL (kHz)": nr_values(dl, "scs_khz"),
+        f"{prefix}BW DL (MHz)": nr_values(dl, "dl_bw_mhz"),
+        f"{prefix}MIMO UL": nr_values(ul, "ul_mimo", True),
+        f"{prefix}SCS UL (kHz)": nr_values(ul, "scs_khz", True),
+        f"{prefix}BW UL (MHz)": nr_values(ul, "ul_bw_mhz", True),
     }
 
 
 def build_tables(combos, lte_rows):
-    """The generateMtkTables projection: classify + the gui_family_counts NRDC
-    split, rows in decode order (python's export path does not sort either)."""
-    endc, nr_all, _lte_from_capability = export.classify(combos, 1)
-    mixed = [
-        any(c.band < FR2_MIN_BAND for c in row.nr)
-        and any(c.band >= FR2_MIN_BAND for c in row.nr)
-        for row in nr_all
-    ]
-    nrdc = [row for row, is_mixed in zip(nr_all, mixed) if is_mixed]
-    nrca = [row for row, is_mixed in zip(nr_all, mixed) if not is_mixed]
-    lte_ca = [
-        {
-            "Band": " + ".join(str(c.band) for c in cb.lte),
-            "DL class": " + ".join(class_letter(c.dl_class) for c in cb.lte),
-            "UL class": " + ".join(lte_ul_cell(c) for c in cb.lte),
-            "MIMO DL": " + ".join("+".join(str(m) for m in c.dl_mimo) for c in cb.lte),
-        }
-        for cb in lte_rows
-    ]
-    nr_ca = [
-        {"NR DL": " + ".join(lte_token(c) for c in cb.nr), **nr_cells(cb.nr)}
-        for cb in nrca
-    ]
-    endc_rows = [
-        {
-            "LTE DL": " + ".join(lte_token(c) for c in cb.lte),
-            "NR DL": " + ".join(lte_token(c) for c in cb.nr),
-            "MIMO DL": join_cc(cb.nr, lambda cc: cc.dl_mimo),
-            "SCS": join_cc(cb.nr, lambda cc: cc.scs_khz),
-            "BW DL (MHz)": join_cc(cb.nr, lambda cc: cc.dl_bw_mhz),
-        }
-        for cb in endc
-    ]
-    nrdc_rows = [
-        {
-            "FR1 DL": " + ".join(lte_token(c) for c in cb.nr if c.band < FR2_MIN_BAND),
-            "FR2 DL": " + ".join(lte_token(c) for c in cb.nr if c.band >= FR2_MIN_BAND),
-            **nr_cells(cb.nr),
-        }
-        for cb in nrdc
-    ]
-    return {"lte_ca": lte_ca, "nr_ca": nr_ca, "endc": endc_rows, "nrdc": nrdc_rows}
+    """The generateMtkTables projection: per-combo presentation families over
+    [lte_rows, combos] with combo_key dedup (keep-first), rows in decode
+    order."""
+    tables = {"lte_ca": [], "nr_sa": [], "nr_ca": [], "endc": [], "nrdc": []}
+    seen = set()
+    for rows in (lte_rows, combos):
+        for combo in rows:
+            family = family_for(combo)
+            key = U.combo_key(combo)
+            if family is None or key in seen:
+                continue
+            seen.add(key)
+            lte_dl = ordered(combo.lte)
+            lte_ul = ordered(combo.lte, True)
+            nr_dl = ordered(combo.nr)
+            nr_ul = ordered(combo.nr, True)
+            lte_mimo = values([m for c in lte_dl for m in c.dl_mimo])
+            if family == "LTE":
+                row = {"LTE DL": bands(lte_dl), "MIMO DL": lte_mimo,
+                       "LTE UL": bands(lte_ul, True)}
+            elif family == "EN-DC":
+                f = nr_columns(nr_dl, nr_ul, "NR ")
+                row = {
+                    "LTE DL": bands(lte_dl), "LTE MIMO DL": lte_mimo,
+                    "NR DL": bands(nr_dl), "NR MIMO DL": f["NR MIMO DL"],
+                    "NR SCS DL (kHz)": f["NR SCS DL (kHz)"],
+                    "NR BW DL (MHz)": f["NR BW DL (MHz)"],
+                    "LTE UL": bands(lte_ul, True), "NR UL": bands(nr_ul, True),
+                    "NR MIMO UL": f["NR MIMO UL"],
+                    "NR SCS UL (kHz)": f["NR SCS UL (kHz)"],
+                    "NR BW UL (MHz)": f["NR BW UL (MHz)"],
+                }
+            elif family == "NRDC":
+                row = {}
+                groups = {
+                    fr: ([c for c in nr_dl if (c.band < FR2_MIN_BAND) == (fr == "FR1")],
+                         [c for c in nr_ul if (c.band < FR2_MIN_BAND) == (fr == "FR1")])
+                    for fr in ("FR1", "FR2")
+                }
+                for direction in ("DL", "UL"):
+                    for fr in ("FR1", "FR2"):
+                        dl, ul = groups[fr]
+                        f = nr_columns(dl, ul, f"{fr} ")
+                        row[f"{fr} {direction}"] = bands(
+                            ul if direction == "UL" else dl, direction == "UL")
+                        for feature in ("MIMO", "SCS", "BW"):
+                            name = (f"{fr} {feature} {direction}"
+                                    + (" (kHz)" if feature == "SCS"
+                                       else " (MHz)" if feature == "BW" else ""))
+                            row[name] = f[name]
+            else:
+                f = nr_columns(nr_dl, nr_ul)
+                row = {"NR DL": bands(nr_dl)}
+                for name, value in f.items():
+                    if " DL" in name:
+                        row[name] = value
+                row["NR UL"] = bands(nr_ul, True)
+                for name, value in f.items():
+                    if " UL" in name:
+                        row[name] = value
+            tables[FAMILY_KEYS[family]].append(row)
+    return tables
+
+
+def counts_with_nr_sa(combos, lte_rows):
+    """gui_family_counts with the NR-SA presentation column the webapp added
+    (the reference parser predates it): an NR row is NR SA when it is not an
+    FR1/FR2 mix and decodes exactly one physical CC. Key order mirrors
+    guiFamilyCounts() in webapp/js/lib/mtk_universal.js."""
+    counts = dict(U.gui_family_counts(combos))
+    _endc, nr, _lte = U.export.classify(combos, 1)
+    nrdc = sum(any(c.band < FR2_MIN_BAND for c in row.nr)
+               and any(c.band >= FR2_MIN_BAND for c in row.nr) for row in nr)
+    nr_sa = sum(row.nr_physical_ccs == 1 for row in nr)
+    return {"endc": counts["endc"], "nr_sa": nr_sa, "nrca": len(nr) - nrdc - nr_sa,
+            "nrdc": counts["nrdc"], "lte": len(lte_rows)}
 
 
 # --- per-card derivation (must stay identical to mtkCardCombos) ----------------
@@ -260,8 +318,7 @@ def main() -> None:
                 tables = build_tables(combos, lte)
                 tables_golden[key] = tables
                 diag_golden[key] = diag_texts(combos, lte, stem, stem, tmp)
-                counts = U.gui_family_counts(combos)
-                counts["lte"] = len(lte)
+                counts = counts_with_nr_sa(combos, lte)
                 image_entry["cards"][key] = {
                     "counts": counts,
                     "rows": {name: len(rows) for name, rows in tables.items()},

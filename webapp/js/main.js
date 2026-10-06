@@ -212,7 +212,7 @@ const CARDLIST_HEAD_QCOM =
 const CARDLIST_HEAD_APPLE =
   '<th></th><th>CR Bank</th><th>Layout</th><th>Profile ID</th><th>LTE</th><th>EN-DC</th><th>NR-CA</th><th>NRDC</th><th>File Size</th><th>Source Path</th>';
 const CARDLIST_HEAD_MTK =
-  '<th></th><th>Bank</th><th>Profile</th><th>EN-DC</th><th>NR-CA</th><th>NR-DC</th><th>LTE CA</th><th>File Size</th><th>Source Path</th>';
+  '<th></th><th>Bank</th><th>Profile</th><th>EN-DC</th><th>NR-CA</th><th>NR-SA</th><th>NR-DC</th><th>LTE CA</th><th>File Size</th><th>Source Path</th>';
 
 function buildCardRow(card, layout) {
   const record = card.record;
@@ -237,7 +237,9 @@ function buildCardRow(card, layout) {
   // NR-DC=NRDC).
   const appleCounts = record.apple ? record.apple.counts : null;
   const mtkCounts = record.mtk ? record.mtk.counts : null;
-  const mtkTotal = mtkCounts ? mtkCounts.endc + mtkCounts.nrca + mtkCounts.nrdc : 0;
+  // nr_sa is the MediaTek single-carrier column; folded into the NR-CA bucket
+  // of the qcom-style "endc+nrca+nrdc=total" summary (SA=NR-CA there).
+  const mtkTotal = mtkCounts ? mtkCounts.endc + mtkCounts.nrca + (mtkCounts.nr_sa ?? 0) + mtkCounts.nrdc : 0;
   const lteCell = appleCounts
     ? appleCounts.lte.toLocaleString("en-US")
     : mtkCounts
@@ -250,7 +252,7 @@ function buildCardRow(card, layout) {
         appleCounts.endc + appleCounts.nrca + appleCounts.nrdc
       }`
     : mtkCounts
-      ? `${mtkCounts.endc}+${mtkCounts.nrca}+${mtkCounts.nrdc}=${mtkTotal}`
+      ? `${mtkCounts.endc}+${mtkCounts.nrca + (mtkCounts.nr_sa ?? 0)}+${mtkCounts.nrdc}=${mtkTotal}`
       : String(record.nr_combos ?? "");
   // Scan counts are the only count source for apple/MTK rows and a bank
   // skipped at scan has none — guard on the actual null/undefined.
@@ -263,6 +265,7 @@ function buildCardRow(card, layout) {
         // Counts are real combos decoded at scan time (spec §2).
         [countCell(mtkCounts, "endc"), "cell-lte"],
         [countCell(mtkCounts, "nrca"), "cell-lte"],
+        [countCell(mtkCounts, "nr_sa"), "cell-lte"],
         [countCell(mtkCounts, "nrdc"), "cell-lte"],
         [countCell(mtkCounts, "lte"), "cell-lte"],
         [humanSize(record.size), "cell-nr"],

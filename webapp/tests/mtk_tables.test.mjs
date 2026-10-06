@@ -26,7 +26,7 @@ import { isValidTablesShape } from "../js/cardcache.js";
 import { sourceFor } from "../js/lib/source.js";
 import { CORPUS_DIR, deepEqualOrdered } from "./helpers.mjs";
 
-// --- synthetic schema pins (spec §4 row schemas, cell-for-cell) ---------------
+// --- synthetic schema pins (reference row schema, cell-for-cell) --------------
 
 // B1A dl / A ul / 4 layers; B3C dl / no UL (class 6) / 2+4 layers.
 const lte1 = new LteComponent(1, 0, 0, [4]);
@@ -38,93 +38,141 @@ const nr2 = new NrComponent(257, 1, 0x1c, [
   new NrCC(30, 4, 40, 2, 40),
 ]);
 
-test("mtk tables: EN-DC rows carry the LTE tokens plus the NR per-CC triplet", () => {
+test("mtk tables: EN-DC rows carry the LTE/NR tokens plus per-direction NR columns", () => {
   const endc = new MtkCombo([lte1, lte2], [nr1]);
   const tables = generateMtkTables([endc]);
   deepEqualOrdered(tables, {
     lte_ca: [],
+    nr_sa: [],
     nr_ca: [],
     endc: [
       {
-        "LTE DL": "1A + 3C",
+        "LTE DL": "3C + 1A",
+        "LTE MIMO DL": "2 + 4 + 4",
         "NR DL": "78A",
-        "MIMO DL": "4",
-        SCS: "15",
-        "BW DL (MHz)": "50",
+        "NR MIMO DL": "4",
+        "NR SCS DL (kHz)": "15",
+        "NR BW DL (MHz)": "50",
+        "LTE UL": "1A",
+        "NR UL": "78A",
+        "NR MIMO UL": "1",
+        "NR SCS UL (kHz)": "15",
+        "NR BW UL (MHz)": "50",
       },
     ],
     nrdc: [],
   });
 });
 
-test("mtk tables: NR-CA rows resolve per-CC SCS/BW/MIMO with ? for absent UL", () => {
+test("mtk tables: single-CC NR rows are NR SA; multi-CC rows are NR-CA", () => {
   const fr1 = new MtkCombo([], [nr1]);
   const fr2 = new MtkCombo([], [nr2]);
   const tables = generateMtkTables([fr1, fr2]);
   deepEqualOrdered(tables, {
     lte_ca: [],
-    // Pure-FR1 and pure-FR2 rows are both NR-CA; only a real mix is NR-DC.
+    // Pure-FR1 single-CC -> NR SA; the two-CC FR2 row -> NR-CA.
+    nr_sa: [
+      {
+        "NR DL": "78A",
+        "MIMO DL": "4",
+        "SCS DL (kHz)": "15",
+        "BW DL (MHz)": "50",
+        "NR UL": "78A",
+        "MIMO UL": "1",
+        "SCS UL (kHz)": "15",
+        "BW UL (MHz)": "50",
+      },
+    ],
     nr_ca: [
-      { "NR DL": "78A", SCS: "15", "BW DL (MHz)": "50", "MIMO DL": "4", "MIMO UL": "1" },
-      { "NR DL": "257B", SCS: "120+30", "BW DL (MHz)": "100+40", "MIMO DL": "2+4", "MIMO UL": "?+2" },
+      {
+        "NR DL": "257B",
+        "MIMO DL": "2 + 4",
+        "SCS DL (kHz)": "120 + 30",
+        "BW DL (MHz)": "100 + 40",
+        "NR UL": "",
+        "MIMO UL": "",
+        "SCS UL (kHz)": "",
+        "BW UL (MHz)": "",
+      },
     ],
     endc: [],
     nrdc: [],
   });
+  // A component without an uplink contributes no UL cells at all (its CCs are
+  // dropped from the UL columns even when a CC carries ul_mimo).
+  const noUl = new MtkCombo([], [new NrComponent(78, 0, 0x1c, [new NrCC(15, 4, 50, null, null)])]);
+  assert.equal(generateMtkTables([noUl]).nr_sa[0]["NR UL"], "");
 });
 
-test("mtk tables: NRDC split keeps the FR1/FR2 band columns and all per-CC values", () => {
+test("mtk tables: NRDC split keeps the FR1/FR2 band and value columns", () => {
   const mixed = new MtkCombo([], [nr1, nr2]);
   const tables = generateMtkTables([mixed]);
   deepEqualOrdered(tables, {
     lte_ca: [],
+    nr_sa: [],
     nr_ca: [],
     endc: [],
     nrdc: [
       {
         "FR1 DL": "78A",
+        "FR1 MIMO DL": "4",
+        "FR1 SCS DL (kHz)": "15",
+        "FR1 BW DL (MHz)": "50",
         "FR2 DL": "257B",
-        SCS: "15 + 120+30",
-        "BW DL (MHz)": "50 + 100+40",
-        "MIMO DL": "4 + 2+4",
-        "MIMO UL": "1 + ?+2",
+        "FR2 MIMO DL": "2 + 4",
+        "FR2 SCS DL (kHz)": "120 + 30",
+        "FR2 BW DL (MHz)": "100 + 40",
+        "FR1 UL": "78A",
+        "FR1 MIMO UL": "1",
+        "FR1 SCS UL (kHz)": "15",
+        "FR1 BW UL (MHz)": "50",
+        "FR2 UL": "",
+        "FR2 MIMO UL": "",
+        "FR2 SCS UL (kHz)": "",
+        "FR2 BW UL (MHz)": "",
       },
     ],
   });
 });
 
-test("mtk tables: LTE CA rows are parallel per-component lists with — for absent UL", () => {
+test("mtk tables: LTE CA rows are the descending-order token triple", () => {
   const tables = generateMtkTables([], [new MtkCombo([lte1, lte2], [])]);
   deepEqualOrdered(tables, {
-    lte_ca: [{ Band: "1 + 3", "DL class": "A + C", "UL class": "A + —", "MIMO DL": "4 + 2+4" }],
+    lte_ca: [{ "LTE DL": "3C + 1A", "MIMO DL": "2 + 4 + 4", "LTE UL": "1A" }],
+    nr_sa: [],
     nr_ca: [],
     endc: [],
     nrdc: [],
   });
 });
 
-test("mtk tables: 4-key envelope, cache-shape compatible, decode order kept", () => {
+test("mtk tables: 5-key envelope, cache-shape compatible, deduped across both lists", () => {
   const endc = new MtkCombo([lte1], [nr1]);
   const dup = new MtkCombo([lte1], [nr1]);
   const tables = generateMtkTables([endc, dup, new MtkCombo([], [nr1])], []);
-  // Exactly the four array keys cardcache.isValidTablesShape requires.
-  assert.deepEqual(Object.keys(tables), ["lte_ca", "nr_ca", "endc", "nrdc"]);
+  // Exactly the five array keys, in the reference tab order (LTE, NR SA,
+  // NRCA, EN-DC, NRDC); the optional nr_sa key keeps 4-key shapes valid.
+  assert.deepEqual(Object.keys(tables), ["lte_ca", "nr_sa", "nr_ca", "endc", "nrdc"]);
   assert.ok(isValidTablesShape(tables));
-  // No dedup or sort here: the inputs arrive dedup-exact from the decode and
-  // python's export path does not reorder either.
-  assert.equal(tables.endc.length, 2);
-  assert.deepEqual(tables.endc[0], tables.endc[1]);
-  // Grammar-classified LTE-only combos are dropped (every python export path
-  // ignores them; the LTE tab shows the dedicated row-table rows).
-  const lteOnly = generateMtkTables([new MtkCombo([lte1], [])], []);
-  assert.deepEqual(lteOnly.endc, []);
-  assert.deepEqual(lteOnly.nr_ca, []);
-  assert.deepEqual(lteOnly.lte_ca, []);
+  assert.equal(isValidTablesShape({ lte_ca: [], nr_ca: [], endc: [], nrdc: [] }), true);
+  assert.equal(isValidTablesShape({ lte_ca: [], nr_ca: [], endc: [], nrdc: [], nr_sa: 4 }), false);
+  // Dedup is keep-first over comboKey across lteRows AND combos: the second
+  // structurally identical EN-DC row collapses, the single-CC NR row (a
+  // different combo) stays.
+  assert.equal(tables.endc.length, 1);
+  assert.equal(tables.nr_sa.length, 1);
+  // A row-table LTE row equal to a capability LTE-only combo is counted once.
+  const lteOnly = new MtkCombo([lte1], []);
+  const twice = generateMtkTables([lteOnly], [lteOnly]);
+  assert.equal(twice.lte_ca.length, 1);
+  // Grammar-classified empty combos render nowhere.
+  const none = generateMtkTables([new MtkCombo([], [])], []);
+  assert.equal(none.lte_ca.length + none.nr_sa.length + none.nr_ca.length + none.endc.length + none.nrdc.length, 0);
 });
 
-test("mtk tables: empty inputs yield four empty tables (valid cache entries)", () => {
+test("mtk tables: empty inputs yield five empty tables (valid cache entries)", () => {
   const tables = generateMtkTables([], []);
-  assert.deepEqual(tables, { lte_ca: [], nr_ca: [], endc: [], nrdc: [] });
+  assert.deepEqual(tables, { lte_ca: [], nr_sa: [], nr_ca: [], endc: [], nrdc: [] });
   assert.ok(isValidTablesShape(tables));
 });
 
@@ -187,6 +235,7 @@ for (const img of mtkImages) {
           assert.deepEqual(
             {
               lte_ca: tables.lte_ca.length,
+              nr_sa: tables.nr_sa.length,
               nr_ca: tables.nr_ca.length,
               endc: tables.endc.length,
               nrdc: tables.nrdc.length,

@@ -338,10 +338,14 @@ test("apple integration: file input accept includes .bin (ftab pickable via brow
   const inputStart = html.indexOf('<input id="file-input"');
   assert.notEqual(inputStart, -1, "file-input missing");
   const inputTag = html.slice(inputStart, html.indexOf(">", inputStart) + 1);
+  // The accept attribute must stay (it keeps the browse dialog focused); the
+  // generic octet-stream entry is what makes extensionless MediaTek parts
+  // (md1drdi_hdr / md1drdi_data) pickable alongside the extension list.
   const accept = /accept="([^"]*)"/.exec(inputTag)?.[1] ?? "";
   const exts = accept.split(",").map((e) => e.trim().toLowerCase());
   assert.ok(exts.includes(".bin"), `accept must include .bin (got: ${accept})`);
   assert.ok(exts.includes(".bbfw"), `accept must include .bbfw (got: ${accept})`);
+  assert.ok(exts.includes("application/octet-stream"), `accept must include application/octet-stream (got: ${accept})`);
 });
 
 // --- parallel scan hook: fan-out inspect must be byte-identical to sequential -------
