@@ -94,6 +94,20 @@ export function findAll(buf, pat, limit = null) {
   return out;
 }
 
+// Little-endian word views for hot scalar scans. Typed arrays use the
+// platform byte order, so guard once; unaligned subarray offsets fall back
+// to the byte-compose u32().
+const LITTLE_ENDIAN = (() => {
+  const b = new ArrayBuffer(4);
+  new Uint32Array(b)[0] = 1;
+  return new Uint8Array(b)[0] === 1;
+})();
+
+function alignedWords32(u8) {
+  if (!LITTLE_ENDIAN || u8.byteOffset % 4 !== 0) return null;
+  return new Uint32Array(u8.buffer, u8.byteOffset, u8.length >> 2);
+}
+
 export class UniversalError extends Error {
   constructor(message) {
     super(message);
@@ -1686,6 +1700,10 @@ export function parseLteRow36(im, off, tables) {
 export function scanLteRowsBank(bank, tables, rep) {
   const result = new Map();
   for (const im of bank.images) {
+    // The count prefilter below walks every stride position of the whole
+    // image — read it through a little-endian word view (identical values to
+    // the byte-compose u32, ~an order of magnitude faster at this volume).
+    const words = alignedWords32(im.drdi);
     let best = [];
     for (const [stride, countDelta, parser] of [[32, 8, parseLteRow], [36, 12, parseLteRow36]]) {
       // Source offsets need not be stride-aligned, so cover every four-byte
@@ -1697,14 +1715,15 @@ export function scanLteRowsBank(bank, tables, rep) {
         let previous = null;
         for (let off = start; off <= im.end_source - stride; off += stride) {
           // Skipped impossible rows still terminate invariant runs; the count
-          // is only a prefilter, full acceptance stays with the parser.
+          // is only a prefilter, full acceptance stays with the parser. Walk
+          // offsets stay 4-aligned (start ≡ residue ≡ 0 mod 4, stride % 4 === 0).
           if (previous !== null && off !== previous + stride) {
             if (cur.length >= 4) rows.push(cur);
             cur = [];
           }
           previous = off;
           let r = null;
-          const count = u32(im.drdi, off + countDelta);
+          const count = words !== null ? words[(off + countDelta) >> 2] : u32(im.drdi, off + countDelta);
           if (count >= 1 && count <= 16) r = parser(im, off, tables);
           if (r) cur.push(r);
           else {
@@ -1812,15 +1831,40 @@ export function discoverSupportedBandList(loader, bank, rat, rep) {
   const slotBytes = 2 * SUPPORTED_BAND_SLOTS;
   const rom = loader.rom;
   const profiles = {};
+  // One rom word pass per BANK: per-image windows are [lo, lo + maxLen), so a
+  // union-window collection followed by the exact per-image window filter is
+  // identical to the former per-image full scans (ptr values, order included).
+  const maxLen = Math.max(...bank.images.map((x) => x.length));
+  const imageLo = new Map();
+  let scanLo = Infinity;
+  let scanHi = -Infinity;
   for (const im of bank.images) {
-    // One rom word scan covers the whole bank: the window [lo, hi) is per
-    // profile, so candidate pointers are collected against the widest window
-    // and re-filtered per profile below (identical result, one pass).
     const lo = im.bank_va + im.alias;
-    const hiMax = lo + Math.max(...bank.images.map((x) => x.length));
+    imageLo.set(im, lo);
+    if (lo < scanLo) scanLo = lo;
+    if (lo + maxLen > scanHi) scanHi = lo + maxLen;
+  }
+  const unionPtrValues = [];
+  if (scanHi > scanLo && bank.images.length) {
+    const words = alignedWords32(rom);
+    if (words !== null) {
+      for (let i = 0; i < words.length; i++) {
+        const v = words[i];
+        if (v >= scanLo && v + slotBytes <= scanHi) unionPtrValues.push(v);
+      }
+    } else {
+      for (let o = 0; o + 4 <= rom.length; o += 4) {
+        const v = u32(rom, o);
+        if (v >= scanLo && v + slotBytes <= scanHi) unionPtrValues.push(v);
+      }
+    }
+  }
+  for (const im of bank.images) {
+    // (Window-filtered candidate pointers; see the bank-wide scan above.)
+    const lo = imageLo.get(im);
+    const hiMax = lo + maxLen;
     const ptrValues = [];
-    for (let o = 0; o + 4 <= rom.length; o += 4) {
-      const v = u32(rom, o);
+    for (const v of unionPtrValues) {
       if (v >= lo && v + slotBytes <= hiMax) ptrValues.push(v);
     }
     ptrValues.sort((a, b) => a - b);

@@ -53,11 +53,22 @@ export function hex(u8) {
 export function hexToBytes(s) { if (s.length % 2 !== 0) throw new RangeError(`odd hex length ${s.length}`); const a = new Uint8Array(s.length / 2); for (let i = 0; i < a.length; i++) a[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16); return a; }
 
 export function indexOfBytes(hay, needle, from = 0) {
-  // needle: array/Uint8Array of bytes; naive scan (needles here ≤ 8 bytes)
+  // needle: array/Uint8Array of bytes; needles here are ≤ 8 bytes. The
+  // first-byte scan runs through TypedArray#indexOf (native, C speed) and
+  // only the ≤7-byte tails are verified in JS — identical results to a naive
+  // double loop, orders of magnitude faster on multi-MB haystacks.
   if (from < 0) from = 0;
-  outer: for (let i = from; i <= hay.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
-    return i;
+  const n = needle.length;
+  if (n === 0) return from <= hay.length ? from : -1;
+  const limit = hay.length - n;
+  const first = needle[0];
+  for (let i = from; i <= limit; ) {
+    const j = hay.indexOf(first, i);
+    if (j < 0 || j > limit) return -1;
+    let k = 1;
+    while (k < n && hay[j + k] === needle[k]) k++;
+    if (k === n) return j;
+    i = j + 1;
   }
   return -1;
 }
