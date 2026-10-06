@@ -600,6 +600,7 @@ async function handleScan(msg) {
         onScanProgress: (info) => {
           if (cancelled.has(id)) return;
           const detail = info.stage === "apple" ? `banks ${info.done}/${info.total}`
+            : info.stage === "mtk" ? `decoding ${info.done}/${info.total}`
             : info.stage === "count" ? `counting ${info.done}/${info.total}`
             : info.stage === "extract" ? "extracting" : "";
           post({ type: "progress", phase: "scan", source: file.name, done: fileIndex, total, currentFile: file.name, detail });

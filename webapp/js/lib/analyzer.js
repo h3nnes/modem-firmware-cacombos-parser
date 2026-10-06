@@ -29,6 +29,7 @@ import {
   ToolError,
 } from "./legacy_parser.js";
 import { parseModernModule, countModernCombos, pyCasefold, pyNdInt, pyRegexFold } from "./modern_parser.js";
+import { scanMtk } from "./mtk_scan.js";
 
 export { ToolError };
 
@@ -456,6 +457,16 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
     onAppleProgress: (done, total) => reportProgress({ stage: "apple", done, total }),
   });
   if (appleScan) return appleScan;
+
+  // MTK DRDI packaged images: one card per (bank, profile). Gated on cheap
+  // magic/role heuristics, so unrelated inputs fall through untouched; a
+  // cancelled mtk scan returns null and the cancel check below turns that
+  // into the shared ScanCancelled unwind.
+  const mtkScan = await scanMtk(source, name, cancelled, {
+    onScanProgress: (info) => reportProgress(info),
+  });
+  if (cancelled()) throw new ScanCancelled();
+  if (mtkScan) return mtkScan;
 
   const fat = new Fat16Image(source);
   try {
