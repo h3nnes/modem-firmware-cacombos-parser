@@ -63,6 +63,16 @@ function mtkHeadPlausible(head, name) {
   return k === "android-sparse" || k === "hblr" || k === "ext4";
 }
 
+// Python json.dumps default separators (", " / ": ") — the loader-attempts
+// diagnostic must read byte-identically to the reference error message.
+const pyJson = (v) => {
+  if (v === null) return "null";
+  if (typeof v === "string") return JSON.stringify(v);
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return `[${v.map(pyJson).join(", ")}]`;
+  return `{${Object.entries(v).map(([k, val]) => `${JSON.stringify(k)}: ${pyJson(val)}`).join(", ")}}`;
+};
+
 // mtk_universal.select_loader for the ported loader families (tensor first
 // when split-CDF parts exist, then grid). The flat/MD800 family is not ported;
 // a grid rejection is terminal, recorded in the attempts list.
@@ -94,7 +104,7 @@ async function selectLoader(parts, rep) {
     return [loader, attempts];
   } catch (err) {
     attempts.push({ loader: "grid", accepted: false, evidence: `dense-run score ${score}`, reason: String(err.message) });
-    throw new UniversalError("no container loader accepted this image; attempts: " + JSON.stringify(attempts));
+    throw new UniversalError("no container loader accepted this image; attempts: " + pyJson(attempts));
   }
 }
 

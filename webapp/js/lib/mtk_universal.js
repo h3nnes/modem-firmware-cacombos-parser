@@ -114,8 +114,20 @@ export class Issue {
 
 const formatPyValue = (v) => {
   if (typeof v === "string") return `'${v}'`;
+  if (typeof v === "boolean") return v ? "True" : "False";
+  if (v === null || v === undefined) return "None";
+  if (v instanceof Uint8Array) {
+    // Python bytes repr: printable ASCII literal, everything else \xNN.
+    let out = "b'";
+    for (const byte of v) {
+      if (byte === 0x5c) out += "\\\\";
+      else if (byte === 0x27) out += "\\'";
+      else if (byte >= 0x20 && byte < 0x7f) out += String.fromCharCode(byte);
+      else out += "\\x" + byte.toString(16).padStart(2, "0");
+    }
+    return out + "'";
+  }
   if (Array.isArray(v)) return `[${v.map(formatPyValue).join(", ")}]`;
-  if (v instanceof Uint8Array) return String([...v]);
   return String(v);
 };
 const formatPyDict = (obj) =>
@@ -2267,6 +2279,7 @@ export function decodeTensorSecondary(loader, bankIndex = 8, rep = null) {
   try {
     results = new TensorSecondaryDecoder(loader, bank, rep).decode();
   } catch (err) {
+    if (err instanceof TypeError) throw err; // a genuine bug must not masquerade as "unresolved"
     if (rep !== null) {
       rep.warn("tensor_secondary_unresolved", "secondary Tensor bank did not pass structural proof",
         { bank_index: bankIndex, reason: String(err && err.message ? err.message : err) });
@@ -2314,7 +2327,8 @@ export function tensorRelatedLte(loader, secondaryProfile, lteProfiles) {
       target.push(u16(loader.header, targetOff + i * 2));
       source.push(u16(loader.header, sourceOff + i * 2));
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof TypeError) throw err; // a genuine bug must not masquerade as "no selector map"
     return all();
   }
   const related = new Set();

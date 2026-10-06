@@ -22,6 +22,7 @@ const metricRows = [
   ["extractContainer ms", (m) => m.extractContainerMs ?? "-"],
   ["parse ms", (m) => m.parseMs],
   ["tables ms", (m) => m.tablesMs],
+  ["mtkDecode ms", (m) => m.mtkDecodeMs ?? "-"],
   ["scan reads", (m) => m.phases.scan.reads],
   ["scan bytes", (m) => m.phases.scan.bytes],
   ["extract reads", (m) => m.phases.extractContainer?.reads ?? "-"],
