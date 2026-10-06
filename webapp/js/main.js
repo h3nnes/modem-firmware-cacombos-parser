@@ -543,9 +543,9 @@ function deliver(collected, cardCount, failedCount) {
     exportStatus(`Exported ${collected.length.toLocaleString("en-US")} file(s) from ${cardCount.toLocaleString("en-US")} card(s) as ${zipName}.${suffix}`);
   } else {
     for (const f of collected) {
-      if (f.filename.endsWith(".mbn")) {
-        // Raw .mbn blobs are binary: download the bytes untouched — the text
-        // path's UTF-8 decode would corrupt them.
+      if (f.filename.endsWith(".mbn") || f.filename.endsWith(".bin")) {
+        // Raw blob dumps are binary (qcom .mbn, apple/MTK .bin): download the
+        // bytes untouched — the text path's UTF-8 decode would corrupt them.
         downloadBytes(f.filename, f.bytes, "application/octet-stream");
       } else {
         download(f.filename, decodeExportBytes(f.bytes), mimeFor(f.filename));
@@ -669,15 +669,19 @@ async function importToParser() {
   els.importParserBtn.textContent = "Importing…";
   try {
     const files = await requestImportTexts(card);
-    // Suffixes match the filenames exportModule produces for the b0cd/b826
-    // formats (<stem>_0xB0CD_v41.txt / <stem>_0xB826_v22.txt) — the reply
-    // reuses them unchanged (deviation note: the plan's ".b0cd.txt" strings
-    // never occur in the reply, so every lookup must key on the real tail).
+    // Suffixes match the filenames the worker's export arms produce: qcom/
+    // apple cards answer with _0xB0CD_v41.txt / _0xB826_v22.txt DIAG texts,
+    // MTK DRDI cards with _mtk_nr_trace.txt / _mtk_lte_ca_comb_info.txt —
+    // the reply reuses them unchanged (deviation note: the plan's ".b0cd.txt"
+    // strings never occur in the reply, so every lookup must key on the real
+    // tail). An MTK card's qcom tails come back undefined and vice versa.
     const textFor = (suffix) => files.find((f) => f.filename && f.filename.endsWith(suffix))?.text;
     const { entries, files: importFiles } = buildImportEntries(
       textFor("_0xB0CD_v41.txt"),
       textFor("_0xB826_v22.txt"),
-      card.record.name
+      card.record.name,
+      textFor("_mtk_nr_trace.txt"),
+      textFor("_mtk_lte_ca_comb_info.txt")
     );
     const form = new FormData();
     form.append("requests", JSON.stringify(entries));

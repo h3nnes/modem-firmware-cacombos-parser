@@ -13,6 +13,10 @@ export const debugCounters = {
   generateWebTables: 0, // qcom viewer table builds
   generateAppleTables: 0, // apple viewer table builds
   generateMtkTables: 0, // MTK viewer table builds
+  buildB826: 0, // MTK B826 v21 family encodes (mtk_export.buildB826)
+  buildB0cd: 0, // MTK B0CD v41 payload builds (mtk_export.buildB0cdV41)
+  renderMtkNrTrace: 0, // MTK NR trace log renders (mtk_trace.renderNrTrace)
+  renderMtkLteLog: 0, // MTK LTE CA_COMB_INFO renders (mtk_trace.renderLteLog)
   fatWalk: 0, // Fat16Image.walk() traversals
   ext4Walk: 0, // Ext4Image.walk() traversals
   postMessage: 0, // worker replies posted (host<->worker transfer volume)

@@ -51,6 +51,54 @@ test("buildImportEntries: description passes through as-is", () => {
   assert.equal(entries[1].description, "  keep  me.mbn ");
 });
 
+// MTK DRDI cards (Stage D): the reconstructed trace texts upload as types
+// MNR ("MEDIATEK NR Trace Log") and M ("MEDIATEK CA_COMB_INFO") — the server's
+// LogType.kt spells both; RequestMultiPart carries type + inputIndexes exactly
+// like the QLTE/QNR entries.
+const MNR = "# Reconstructed from MediaTek firmware; not a captured modem log.\n[CAP] FSC[1], D/U[N1/N1]\n";
+const M = "MSG_ID_ERRC_RCM_UE_PRE_CA_COMB_INFO\nbandwidth_comb_set = Array[1]\n";
+
+test("buildImportEntries: MTK trace texts -> MNR+M entries with dense indexes", () => {
+  const { entries, files } = buildImportEntries("", "", NAME, MNR, M);
+  assert.deepEqual(entries, [
+    { inputIndexes: [0], type: "MNR", description: NAME },
+    { inputIndexes: [1], type: "M", description: NAME },
+  ]);
+  assert.deepEqual(files, [
+    { filename: `${NAME}.mtk_nr.txt`, text: MNR },
+    { filename: `${NAME}.mtk_lte.txt`, text: M },
+  ]);
+});
+
+test("buildImportEntries: mtk_nr only -> single MNR entry, index 0 (dense)", () => {
+  const { entries, files } = buildImportEntries("", "", NAME, MNR, "");
+  assert.deepEqual(entries, [{ inputIndexes: [0], type: "MNR", description: NAME }]);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].filename, `${NAME}.mtk_nr.txt`);
+});
+
+test("buildImportEntries: mtk_lte only -> single M entry, index 0 (dense)", () => {
+  const { entries, files } = buildImportEntries(undefined, null, NAME, "", M);
+  assert.deepEqual(entries, [{ inputIndexes: [0], type: "M", description: NAME }]);
+  assert.equal(files[0].filename, `${NAME}.mtk_lte.txt`);
+});
+
+test("buildImportEntries: mixed qcom + MTK texts keep the QLTE,QNR,MNR,M order", () => {
+  const { entries, files } = buildImportEntries(B0CD, B826, NAME, MNR, M);
+  assert.deepEqual(entries.map((e) => e.type), ["QLTE", "QNR", "MNR", "M"]);
+  assert.deepEqual(entries.map((e) => e.inputIndexes), [[0], [1], [2], [3]]);
+  assert.deepEqual(files.map((f) => f.filename), [
+    `${NAME}.b0cd.txt`,
+    `${NAME}.b826.txt`,
+    `${NAME}.mtk_nr.txt`,
+    `${NAME}.mtk_lte.txt`,
+  ]);
+});
+
+test("buildImportEntries: all four empty -> throws covering the MTK arms too", () => {
+  assert.throws(() => buildImportEntries("", "", NAME, "", ""), /No DIAG packets to import/);
+});
+
 test("resultUrl: /view/multi/?id= with the id query-encoded", () => {
   assert.equal(
     resultUrl("550e8400-e29b-41d4-a716-446655440000"),

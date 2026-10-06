@@ -15,8 +15,10 @@
 //                                                   lane (never queued behind a
 //                                                   running scan)
 //   { type: "export",    id, sourceId, fileIndex?, record, format }  mbn|json|csv|
-//                                                   webcsv|b0cd|b826
-//   { type: "importCards", id, sourceId, fileIndex?, record } -> both DIAG texts
+//                                                   webcsv|b0cd|b826|mtk_nr|mtk_lte
+//   { type: "importCards", id, sourceId, fileIndex?, record } -> DIAG texts
+//                                                   (qcom/apple b0cd+b826) or the
+//                                                   MTK trace texts (mtk_nr+mtk_lte)
 //   { type: "release" }  drop every registered source + memo (Clear button)
 //   { type: "clearCache" }  wipe the worker-side parsed-table cache
 //   { type: "cancel",    id }
@@ -96,6 +98,8 @@ import { unwrapBytes } from "./lib/mtk_containers.js";
 import { decodeMtkSummary, mtkCardCombos } from "./lib/mtk_scan.js";
 import { Reporter } from "./lib/mtk_universal.js";
 import { generateMtkTables } from "./lib/mtk_tables.js";
+import { buildB0cdText, buildB826CombinedText } from "./lib/mtk_export.js";
+import { renderLteLog, renderNrTrace } from "./lib/mtk_trace.js";
 import {
   bump,
   snapshotDebugCounters,
@@ -630,6 +634,98 @@ async function exportAppleFiles(sourceId, fileIndex, record, format) {
   throw new ToolError(`Unsupported export format: ${format}`);
 }
 
+// Export dispatch for MTK DRDI records (spec §3). mbn = the raw profile image
+// slice (pure dump, no parse, mirrors the apple bank dump); json/csv/webcsv
+// mirror the apple model over the MTK viewer tables; b0cd/b826/mtk_nr/mtk_lte
+// are the byte-exact ports of mtk_export.py / mtk_trace.js.
+//
+// Format gating mirrors python's run_bank_extraction: b826/mtk_nr need the
+// card's capability combos, b0cd/mtk_lte need its LTE CA row rows — a card
+// lacking a side (bank-only LTE row profiles on Tensor images) produces NO
+// file for that format (the batch export loop tolerates the empty reply).
+//
+// Filenames carry a per-card stem derived from the source image name plus
+// bank/profile (stable, filesystem-safe, unique per card); the embedded
+// "# Device:" line keeps the raw image stem, which is what the golden
+// differential pins and what the parser-side display shows. The import flow
+// keys on filename TAILS, so the per-card suffix stays invisible there.
+async function exportMtkFiles(sourceId, fileIndex, record, format) {
+  if (format === "mbn") {
+    const image = await ensureMtkImage(sourceId);
+    return [{ filename: `${mtkCardStem(sourceId, record)}.bin`, bytes: mtkProfileImage(image.summary, record) }];
+  }
+  const parsed = await parsedFor(sourceId, fileIndex, record);
+  const stem = mtkCardStem(sourceId, record);
+  const device = mtkDeviceName(sourceId, record);
+  if (format === "json") {
+    bump("generateMtkTables");
+    const tables = generateMtkTables(parsed.combos, parsed.lteCombos);
+    const text = JSON.stringify({ name: record.name, profile: record.mtk.profile, tables }, null, 2) + "\n";
+    return [{ filename: `${stem}_all_combos.json`, text }];
+  }
+  if (format === "csv" || format === "webcsv") {
+    // Same shape as the apple arm: both formats write the four viewer tables
+    // through the shared toCsvText writer.
+    bump("generateMtkTables");
+    const tables = generateMtkTables(parsed.combos, parsed.lteCombos);
+    const names = { lte_ca: "lteca", nr_ca: "nrca", endc: "endc", nrdc: "nrdc" };
+    const files = [];
+    for (const table of ["lte_ca", "nr_ca", "endc", "nrdc"]) {
+      if (!tables[table] || tables[table].length === 0) continue;
+      const text = toCsvText(tables[table]);
+      if (text !== null) files.push({ filename: `${stem}_${names[table]}.csv`, text });
+    }
+    return files;
+  }
+  if (format === "b826" || format === "mtk_nr") {
+    if (!parsed.combos.length) return [];
+    if (format === "mtk_nr") {
+      return [{ filename: `${stem}_mtk_nr_trace.txt`, text: renderNrTrace(parsed.combos, device).text }];
+    }
+    return [{ filename: `${stem}_0xB826_v21_combined.txt`, text: buildB826CombinedText(parsed.combos, device).text }];
+  }
+  if (format === "b0cd" || format === "mtk_lte") {
+    if (!parsed.lteCombos.length) return [];
+    if (format === "mtk_lte") {
+      return [{ filename: `${stem}_mtk_lte_ca_comb_info.txt`, text: renderLteLog(parsed.lteCombos, device).text }];
+    }
+    return [{ filename: `${stem}_0xB0CD_v41.txt`, text: buildB0cdText(parsed.lteCombos, device).text }];
+  }
+  throw new ToolError(`Unsupported export format: ${format}`);
+}
+
+// Sanitized per-card export stem: "<image stem>_bank<b>_profile<p>". Only
+// filename-safe characters survive; the text-embedded device line (below)
+// keeps the raw stem for golden parity.
+function mtkCardStem(sourceId, record) {
+  return `${mtkDeviceName(sourceId, record).replace(/[^A-Za-z0-9._-]+/g, "_") || "mtk"}`
+    + `_bank${record.mtk.bankIndex}_profile${record.mtk.profile}`;
+}
+
+// The image stem (python Path(name).stem) — the "Device:" value every MTK
+// export text embeds and the golden differential keys on.
+function mtkDeviceName(sourceId, record) {
+  const name = record.source_path || sourceEntry(sourceId).file.name || "";
+  return name.split("/").pop().replace(/\.[^.]+$/, "");
+}
+
+// The raw profile image bytes for a card (record.sha256 is the digest of this
+// slice — mtk_scan.js seeds it at scan time). Lookup mirrors mtkCardCombos'
+// branch order: capability profiles via the memoized summary states, then
+// Tensor secondary rows, then bank-only LTE row-table profiles.
+function mtkProfileImage(summary, record) {
+  const { bankIndex, profile } = record.mtk;
+  if (bankIndex === summary.capability_bank_index && summary._perProfile.has(profile)) {
+    const state = summary._states.find((s) => s.image.profile === profile);
+    if (state) return state.image.drdi.subarray(state.image.source_offset, state.image.end_source);
+  }
+  const im = summary._loader.banks[bankIndex]?.images.find((x) => x.profile === profile);
+  if (!im) {
+    throw new Error(`no MTK profile image for bank ${bankIndex} profile ${profile}`);
+  }
+  return im.drdi.subarray(im.source_offset, im.end_source);
+}
+
 async function handleScan(msg) {
   resetSession();
   session = { scanId: msg.id };
@@ -753,6 +849,10 @@ async function handleExport(msg) {
   let files;
   if (msg.record.apple) {
     files = await exportAppleFiles(msg.sourceId, msg.fileIndex, msg.record, msg.format);
+  } else if (msg.record.mtk) {
+    // MTK DRDI arm: mbn/json/csv/webcsv/b0cd/b826/mtk_nr/mtk_lte all dispatch
+    // through exportMtkFiles (the qcom mbn special-case below stays untouched).
+    files = await exportMtkFiles(msg.sourceId, msg.fileIndex, msg.record, msg.format);
   } else if (msg.format === "mbn") {
     // Raw .mbn dump (Python export_module "mbn"): the untouched blob under
     // record.name — byte-for-byte, no parse, no text encoding. Reuses the
@@ -767,7 +867,8 @@ async function handleExport(msg) {
     files = exportModule(msg.record, parsed, msg.format);
   }
   // One reply per export request: every file the format produced travels
-  // together (mbn=1, json=1, csv=2, webcsv=1-4, b0cd/b826=1), so the main
+  // together (mbn=1, json=1, csv=2, webcsv=1-4, b0cd/b826=1, MTK
+  // b0cd/b826/mtk_nr/mtk_lte=0-1 with the format gating), so the main
   // thread can await the complete reply when running batch exports.
   // Binary files travel as transferable ArrayBuffers (one worker-side copy so
   // the memoized blob stays usable — transferring would detach it); text
@@ -785,10 +886,12 @@ async function handleExport(msg) {
   post({ type: "exportBlob", id: msg.id, files: payload }, transfer);
 }
 
-// Import-to-parser support: the main thread uploads a single card's DIAG
-// packet texts to uecaps.hennes.xyz/parse/multiPart. Both packet sets are
-// forced here regardless of the export checkboxes (import is ticked-only,
-// not export-ticked-only). An empty packet set (rare, legacy-only cards) is
+// Import-to-parser support: the main thread uploads a single card's capability
+// texts to uecaps.hennes.xyz/parse/multiPart. All supported sets are forced
+// here regardless of the export checkboxes (import is ticked-only, not
+// export-ticked-only): qcom/apple cards send the 0xB0CD/0xB826 DIAG packet
+// texts, MTK DRDI cards the two reconstructed trace texts (MTK arm above). An
+// empty packet set (rare, legacy-only cards) is
 // OMITTED — exportModule would happily write a header-only text for `[]`,
 // which the parser would accept as an (empty) capability, so the length
 // check here is what makes "send only non-empty entries" true; a card with
@@ -797,6 +900,26 @@ async function handleExport(msg) {
 // plumbing applies unchanged.
 async function handleImportCards(msg) {
   const files = [];
+  if (msg.record.mtk) {
+    // MTK DRDI cards upload the two reconstructed trace texts (spec §3): the
+    // NR trace log as type MNR and the LTE CA_COMB_INFO as type M. Format
+    // gating mirrors exportMtkFiles, and a text that represents an EMPTY
+    // capability (no FSC rows / no band_comb blocks) is omitted — the same
+    // "send only non-empty entries" rule as the qcom/apple empty-packet paths.
+    for (const format of ["mtk_nr", "mtk_lte"]) {
+      try {
+        for (const f of await exportMtkFiles(msg.sourceId, msg.fileIndex, msg.record, format)) {
+          const meaningful =
+            format === "mtk_nr" ? f.text.includes("[CAP] FSC[") : f.text.includes("band_comb[");
+          if (meaningful) files.push({ filename: f.filename, text: f.text });
+        }
+      } catch {
+        // Belt-and-braces: an export error here also means "omit this set".
+      }
+    }
+    post({ type: "exportBlob", id: msg.id, files }, []);
+    return;
+  }
   for (const format of ["b0cd", "b826"]) {
     try {
       // Apple records export DIAG texts from the parsed CR bank; qcom records

@@ -327,3 +327,75 @@ test("worker: MTK card open reuses the scan-seeded image memo (corpus-gated)", {
   );
   assert.match(reply.message, /unknown sourceId/, "release drops the registered source");
 });
+
+// MTK DRDI export + import-to-parser arms (Stage D). The worker's
+// exportMtkFiles texts must be byte-identical to the python reference's
+// per-card texts (goldens/mtk/diag.json — the same differential the lib tests
+// pin); the import arm answers with both trace texts keyed on their filename
+// tails, which is all the main thread's textFor lookups need.
+const mtkGoldenDiagAvailable = () => existsSync(new URL("../goldens/mtk/diag.json", import.meta.url));
+
+test("worker: MTK export + importCards produce the golden trace texts (corpus-gated)", { skip: !(mtkWorkerAvailable() && mtkGoldenDiagAvailable()) }, async () => {
+  const { readFile } = await import("node:fs/promises");
+  const golden = JSON.parse(await readFile(new URL("../goldens/mtk/diag.json", import.meta.url), "utf8"));
+  const file = new File([await readFile(join(CORPUS_DIR, mtkWorkerImage))], mtkWorkerImage);
+  const sourceId = 501;
+  const scan = await request(
+    { type: "scan", id: 8, files: [{ sourceId, file }] },
+    (m) => m.type === "records" && m.fileIndex === 0,
+    60000,
+  );
+  const record = scan.records[0];
+  const stem = mtkWorkerImage.replace(/\.[^.]+$/, "");
+  const key = `${stem}/bank${record.mtk.bankIndex}/profile${record.mtk.profile}`;
+  const afterScan = workerModule.getDebugCounters();
+
+  // mbn export: the raw profile image slice, digest-pinned — record.sha256 was
+  // seeded at scan time over exactly this byte range (mtk_scan.js).
+  const { sha256Hex } = await import("../js/lib/hash.js");
+  const mbn = await request(
+    { type: "export", id: 70, sourceId, fileIndex: 0, record, format: "mbn" },
+    (m) => m.type === "exportBlob" && m.id === 70,
+  );
+  assert.equal(mbn.files.length, 1);
+  assert.match(mbn.files[0].filename, /\.bin$/);
+  assert.equal(await sha256Hex(new Uint8Array(mbn.files[0].bytes)), record.sha256);
+
+  // b0cd export through the worker arm: byte-exact, stable per-card filename.
+  const b0cd = await request(
+    { type: "export", id: 71, sourceId, fileIndex: 0, record, format: "b0cd" },
+    (m) => m.type === "exportBlob" && m.id === 71,
+  );
+  assert.equal(b0cd.files.length, 1);
+  assert.equal(b0cd.files[0].filename, `${stem}_bank${record.mtk.bankIndex}_profile${record.mtk.profile}_0xB0CD_v41.txt`);
+  assert.equal(b0cd.files[0].text, golden[key].b0cd);
+
+  // mtk_nr export: byte-exact trace text; a fresh render (no memo) bumps the
+  // counter, and no re-unwrap happened (the scan seeded the image memo).
+  const nr = await request(
+    { type: "export", id: 72, sourceId, fileIndex: 0, record, format: "mtk_nr" },
+    (m) => m.type === "exportBlob" && m.id === 72,
+  );
+  assert.equal(nr.files.length, 1);
+  assert.equal(nr.files[0].text, golden[key].mtk_nr);
+  const afterExport = workerModule.getDebugCounters();
+  assert.equal(afterExport.unwrapMtk, afterScan.unwrapMtk, "exports must not re-unwrap");
+  assert.equal(afterExport.renderMtkNrTrace, afterScan.renderMtkNrTrace + 1);
+  assert.equal(afterExport.buildB0cd, afterScan.buildB0cd + 1);
+
+  // importCards: the two trace texts (types MNR + M on the main thread), each
+  // keyed on its filename tail.
+  const imported = await request(
+    { type: "importCards", id: 73, sourceId, fileIndex: 0, record },
+    (m) => m.type === "exportBlob" && m.id === 73,
+  );
+  assert.deepEqual(
+    imported.files.map((f) => f.filename),
+    [
+      `${stem}_bank${record.mtk.bankIndex}_profile${record.mtk.profile}_mtk_nr_trace.txt`,
+      `${stem}_bank${record.mtk.bankIndex}_profile${record.mtk.profile}_mtk_lte_ca_comb_info.txt`,
+    ],
+  );
+  assert.equal(imported.files[0].text, golden[key].mtk_nr);
+  assert.equal(imported.files[1].text, golden[key].mtk_lte);
+});
