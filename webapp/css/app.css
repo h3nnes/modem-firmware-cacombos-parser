@@ -1,18 +1,26 @@
-/* Workbench UI: clean light-neutral theme mirroring the Tk viewer palette
-   (zebra #FFFFFF/#F7F9FA, header #E8ECF0, selection #0078D7). System fonts
-   only — zero network requests. */
+/* Workbench UI: soft grey dark theme (medium-grey surfaces, not black).
+   Band colors in the viewer are lifted toward white further down so the Tk
+   palette stays legible on the dark background. System fonts only — zero
+   network requests. */
 
 :root {
-  --bg: #f3f5f7;
-  --panel: #ffffff;
-  --border: #d4d9de;
-  --text: #1e242b;
-  --muted: #555555;
-  --accent: #0078d7;
-  --header-bg: #e8ecf0;
-  --zebra: #f7f9fa;
-  --warn-bg: #fff7e0;
-  --warn-border: #e0c36a;
+  color-scheme: dark;
+  --bg: #3a3f45;
+  --panel: #41474e;
+  --border: #565d66;
+  --text: #e6eaee;
+  --muted: #aab3bc;
+  --accent: #4d9fe0;
+  --header-bg: #4b525a;
+  --zebra: #464c54;
+  --warn-bg: #4a4127;
+  --warn-border: #8a7434;
+  --hover: #50575f;
+  --sel: #3b5c7d;
+  --line: #4c525a;
+  --link: #79b8f0;
+  --ok: #6fce9a;
+  --warn-text: #e0c56a;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
 }
@@ -58,7 +66,7 @@ body {
   border: 2px dashed var(--border);
   border-radius: 8px;
   color: var(--muted);
-  background: #fafbfc;
+  background: var(--bg);
   flex: 1 1 auto;
   min-width: 0;
   cursor: pointer;
@@ -66,7 +74,7 @@ body {
 
 #dropzone.drag {
   border-color: var(--accent);
-  background: #eaf4fd;
+  background: rgba(77, 159, 224, 0.18);
   color: var(--accent);
 }
 
@@ -90,12 +98,12 @@ button {
   padding: 5px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fdfdfe;
+  background: var(--header-bg);
   color: var(--text);
   cursor: pointer;
 }
 
-button:hover:not(:disabled) { background: #eef3f8; }
+button:hover:not(:disabled) { background: var(--hover); }
 
 button:disabled {
   opacity: 0.5;
@@ -159,7 +167,7 @@ button:disabled {
 }
 
 #warnings .warning strong {
-  color: #8a6d1a;
+  color: var(--warn-text);
   font-weight: 600;
 }
 
@@ -221,7 +229,7 @@ body.dragging {
 
 #cardlist th, #cardlist td {
   padding: 6px 8px;
-  border-bottom: 1px solid #eceff2;
+  border-bottom: 1px solid var(--line);
   text-align: left;
   white-space: nowrap;
 }
@@ -234,8 +242,8 @@ body.dragging {
 }
 
 #cardlist tbody tr { cursor: pointer; }
-#cardlist tbody tr:hover { background: #eef3f8; }
-#cardlist tbody tr.selected { background: #dcebf9; }
+#cardlist tbody tr:hover { background: var(--hover); }
+#cardlist tbody tr.selected { background: var(--sel); }
 #cardlist td.cell-lte, #cardlist td.cell-nr { text-align: right; font-family: var(--mono); }
 #cardlist td.cell-name { font-family: var(--mono); }
 #cardlist td.cell-identity { font-family: var(--mono); color: var(--muted); }
@@ -309,50 +317,50 @@ body.dragging {
   margin-left: auto;
 }
 
-#exportbar #export-status { color: #8a6d1a; }
+#exportbar #export-status { color: var(--warn-text); }
 
-/* "Export ticked" is the bar's primary action: light-blue tint of the
-   selection accent (#0078D7) with dark text, distinct from the plain buttons. */
+/* "Export ticked" is the bar's primary action: a blue tint of the accent,
+   distinct from the plain buttons. */
 #exportbar #export-ticked-btn {
-  background: #cce4f7;
-  border-color: #8fc1e8;
+  background: #2f4f6b;
+  border-color: #4d80aa;
   color: var(--text);
   font-weight: 600;
 }
 
 #exportbar #export-ticked-btn:hover:not(:disabled) {
-  background: #b9d9f2;
-  border-color: #6fb1e0;
+  background: #38608a;
+  border-color: #5f9ed0;
 }
 
 /* Disabled stays visually distinct: washed-out blue fill, muted border,
    reduced opacity like the other disabled buttons. */
 #exportbar #export-ticked-btn:disabled {
-  background: #e8f1fa;
+  background: #35424e;
   border-color: var(--border);
   color: var(--muted);
   opacity: 0.6;
 }
 
 /* "Import to parser" pushes one card's DIAG packets to uecaps.hennes.xyz:
-   light-red tint of the export accent family, dark text — visually a sibling
-   of the light-blue "Export ticked" but clearly a different action. */
+   a red tint — visually a sibling of the blue "Export ticked" but clearly a
+   different action. */
 #exportbar #import-parser-btn {
-  background: #f7d4d4;
-  border-color: #e8a8a8;
+  background: #5a3a3a;
+  border-color: #8a5a5a;
   color: var(--text);
   font-weight: 600;
 }
 
 #exportbar #import-parser-btn:hover:not(:disabled) {
-  background: #f2bcbc;
-  border-color: #dd8f8f;
+  background: #6b4444;
+  border-color: #a06a6a;
 }
 
 /* Disabled stays visually distinct: washed-out red fill, muted border,
    reduced opacity like the other disabled buttons. */
 #exportbar #import-parser-btn:disabled {
-  background: #f9ecec;
+  background: #453535;
   border-color: var(--border);
   color: var(--muted);
   opacity: 0.6;
@@ -362,7 +370,7 @@ body.dragging {
    import finished". Shown/hidden by main.js; [hidden] keeps it out of
    layout until the first success. */
 #import-done-tick {
-  color: #1d7a3a;
+  color: var(--ok);
   font-weight: 700;
   margin-left: 2px;
   user-select: none;
@@ -383,10 +391,10 @@ body.dragging {
   display: block; /* each import on its own line, new ones under the last */
 }
 #import-results a {
-  color: #0b62c4;
+  color: var(--link);
 }
 #import-results .import-result-name {
-  color: #5a6472;
+  color: var(--muted);
   margin-left: 8px;
 }
 
@@ -426,12 +434,14 @@ body.dragging {
   border: 1px solid var(--border);
   border-radius: 6px;
   width: 260px;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .cv-clear-btn { padding: 4px 9px; }
 .cv-scs-label { display: flex; align-items: center; gap: 4px; user-select: none; }
 .cv-count { color: var(--muted); }
-.cv-status { color: #8a6d1a; flex: none; }
+.cv-status { color: var(--warn-text); flex: none; }
 
 .cv-tabs {
   display: flex;
@@ -444,7 +454,7 @@ body.dragging {
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  background: #f1f3f5;
+  background: var(--bg);
   padding: 5px 14px;
 }
 
@@ -505,8 +515,8 @@ body.dragging {
   white-space: nowrap;
   overflow: hidden;
   padding: 0;
-  border-right: 1px solid #d8dde2;
-  border-bottom: 1px solid #c8ced4;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
 }
@@ -525,7 +535,7 @@ body.dragging {
   width: 7px;
   height: 100%;
   cursor: col-resize;
-  background: linear-gradient(to right, transparent 5px, #b9c0c7 5px);
+  background: linear-gradient(to right, transparent 5px, #6b737c 5px);
 }
 
 .cv-colhandle:hover { background: var(--accent); }
@@ -551,6 +561,8 @@ body.dragging {
   padding: 2px 4px;
   border: 1px solid var(--border);
   border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .cv tbody td {
@@ -558,14 +570,14 @@ body.dragging {
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
-  border-right: 1px solid #eef1f4;
+  border-right: 1px solid var(--line);
 }
 
 /* Zebra stripes are class-based, not :nth-child, so the virtualization spacer
    rows cannot shift parity and stripes stay stable while scrolling. Mirrors
    viewer.py's evenrow/oddrow by FILTERED index (idx % 2). */
-.cv tbody tr.cv-row-even { background: #ffffff; }
-.cv tbody tr.cv-row-odd { background: #f7f9fa; }
+.cv tbody tr.cv-row-even { background: var(--panel); }
+.cv tbody tr.cv-row-odd { background: var(--zebra); }
 .cv tbody tr.sel { background: var(--accent); color: #ffffff; }
 .cv tbody tr.sel td { border-right-color: rgba(255, 255, 255, 0.25); }
 
@@ -617,6 +629,52 @@ body.dragging {
 .cv .band-c38 { color: #E64A19; }
 .cv .band-c39 { color: #8E24AA; }
 
+/* Dark theme: the Tk palette above is tuned for a light background and is
+   pinned byte-for-byte by tests/viewer_window.test.mjs. On the dark viewer
+   these later rules re-tint the same 40 indices — hue preserved, lightness
+   lifted toward white — so band text stays legible. Same selectors +
+   specificity, declared last so they win. */
+.cv .band-c0 { color: #EF9595; }
+.cv .band-c1 { color: #EDABAB; }
+.cv .band-c2 { color: #F296BA; }
+.cv .band-c3 { color: #F186B5; }
+.cv .band-c4 { color: #F069B1; }
+.cv .band-c5 { color: #CE8EE9; }
+.cv .band-c6 { color: #DE9DE9; }
+.cv .band-c7 { color: #C385EA; }
+.cv .band-c8 { color: #B49FE5; }
+.cv .band-c9 { color: #A996E5; }
+.cv .band-c10 { color: #ACB4E3; }
+.cv .band-c11 { color: #9FA8E2; }
+.cv .band-c12 { color: #919BE1; }
+.cv .band-c13 { color: #7781E3; }
+.cv .band-c14 { color: #92BFF3; }
+.cv .band-c15 { color: #76A7F4; }
+.cv .band-c16 { color: #78CCFE; }
+.cv .band-c17 { color: #5FB8FE; }
+.cv .band-c18 { color: #55F1FF; }
+.cv .band-c19 { color: #37F7FF; }
+.cv .band-c20 { color: #45FFEA; }
+.cv .band-c21 { color: #3AFFE7; }
+.cv .band-c22 { color: #27FFDA; }
+.cv .band-c23 { color: #91D694; }
+.cv .band-c24 { color: #6FD676; }
+.cv .band-c25 { color: #92D876; }
+.cv .band-c26 { color: #E6DB74; }
+.cv .band-c27 { color: #D5C8C3; }
+.cv .band-c28 { color: #CDB3AA; }
+.cv .band-c29 { color: #C8ABA2; }
+.cv .band-c30 { color: #C1A096; }
+.cv .band-c31 { color: #BB948C; }
+.cv .band-c32 { color: #BBBDC0; }
+.cv .band-c33 { color: #A5B8C1; }
+.cv .band-c34 { color: #97ACB7; }
+.cv .band-c35 { color: #859FAC; }
+.cv .band-c36 { color: #F7A186; }
+.cv .band-c37 { color: #F6B4A0; }
+.cv .band-c38 { color: #F5B7A3; }
+.cv .band-c39 { color: #D897E9; }
+
 /* --- context menu ----------------------------------------------------------------- */
 
 .cv-contextmenu {
@@ -642,7 +700,7 @@ body.dragging {
   border-radius: 4px;
 }
 
-.cv-contextmenu button:hover { background: #eef3f8; }
+.cv-contextmenu button:hover { background: var(--hover); }
 
 .cv-contextmenu hr {
   border: none;
@@ -675,8 +733,8 @@ body.dragging {
 
 .compare-table thead th { background: var(--header-bg); }
 .compare-table td.compare-band { text-align: left; font-weight: 600; }
-.compare-table td.present { color: #1b5e20; }
-.compare-table td.absent { color: #b0b7bd; }
+.compare-table td.present { color: var(--ok); }
+.compare-table td.absent { color: var(--muted); }
 
 /* --- mobile portrait: stacked workbench ---------------------------------------------- */
 
