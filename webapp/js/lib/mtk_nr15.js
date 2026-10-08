@@ -1,9 +1,8 @@
-// Port of mtk-drdi-combo-parser/mtk_nr15.py and mtk_nr15_bw.py (via the
-// reference nr15.js port): NR15 grids (MT6833 / MT6877), ROM-resident profile
-// roots, the older two-byte MIMO grammar, and the firmware bandwidth-pair /
-// SCS projection. There is NO python ground truth for this family in the
-// reference copy we differentiate against, so the decoder is ported as-is and
-// covered by synthetic probe/activation tests only.
+// NR15 decoder: NR15 grids (MT6833 / MT6877), ROM-resident profile roots,
+// the older two-byte MIMO grammar, and the firmware bandwidth-pair /
+// SCS projection. There is NO ground truth for this family in the reference
+// copy we differentiate against, so the decoder ships as-is and
+// is covered by synthetic probe/activation tests only.
 //
 // MEMORY NOTE (deliberate, do not "fix" without ground truth): Nr15Decoder
 // concatenates rom+drdi into one buffer (2x input footprint) and builds a
@@ -42,7 +41,7 @@ import { indexOfBytes } from "./bytes.js";
 
 const findBytes = (hay, needle, from = 0) => indexOfBytes(hay, needle, from);
 
-// --- mtk_nr15_bw.py --------------------------------------------------------------
+// --- bandwidth-pair tables -------------------------------------------------------
 
 const PAIR_TABLES = {
   1: [[10, 5], [9, 7], [7, 9], [5, 10]],
@@ -95,7 +94,7 @@ export function bandwidthPairs(limits, mode, bandwidths) {
   return result.length || mode === 6 ? result : [[10, 10]];
 }
 
-// --- mtk_nr15.py -----------------------------------------------------------------
+// --- NR15 grid decoder -----------------------------------------------------------
 
 const BW_MODE_INTER = 4;
 const BW_MODE_INTRA = 3;

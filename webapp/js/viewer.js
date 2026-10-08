@@ -1,13 +1,8 @@
-// HTML port of gui_version/viewer.py's ComboViewerWindow. Python-parity
-// contract, note-for-note where Tk allows:
-// - TAB_DEFINITIONS (:116-121), band sorting (_band_sort_key :69-83 +
-//   _column_sort_key :86-99), filter re-sort sharing the same key (commit
-//   5319687), apply_filter (:467-502, nospace fallback + count label strings),
-//   SCS visibility rule (:261), zebra rows (:424-425), band-token coloring via
-//   bandcolors with a memoized color map (:433-443), header-click sort with
-//   ▲/▼ indicators (:407-411), selection (click/ctrl/shift, :627-644), the
-//   three-item copy context menu (:655-660, :662-718), per-tab CSV export
-//   (:720-753) and the info banner (:183-197).
+// ComboViewer: the table viewer UI (tabs, band sorting, filter re-sort,
+// apply-filter with nospace fallback + count label strings, SCS visibility
+// rule, zebra rows, band-token coloring via bandcolors with a memoized color
+// map, header-click sort with ▲/▼ indicators, selection click/ctrl/shift,
+// the three-item copy context menu, per-tab CSV export and the info banner).
 // - Sorting/filtering run on the already-JSON table rows in the main thread;
 //   nothing here re-parses. The renderer touches the DOM only through the
 //   ComboViewer class, so the pure helpers stay unit-testable in Node.
@@ -20,7 +15,7 @@ const ASCII_DIGITS_RE = /^[0-9]+$/;
 
 export const TAB_DEFINITIONS = [
   ["LTE", "lte_ca"],
-  // MediaTek only: single-carrier NR rows (mtk_viewer.py "NR SA (1CC)").
+  // MediaTek only: single-carrier NR rows ("NR SA (1CC)").
   ["NR SA", "nr_sa"],
   ["NRCA", "nr_ca"],
   ["ENDC", "endc"],
@@ -31,10 +26,10 @@ export const EMPTY_COUNT_LABEL = "0 combos";
 
 const BAND_COLUMN_SET = new Set(BAND_COLUMN_HEADERS);
 
-// --- sort keys (viewer.py:69-99) ------------------------------------------------
+// --- sort keys ------------------------------------------------------------------
 
-// viewer.py's _PLAIN_BAND_RE: Python '$' matches before a single trailing \n
-// and \d is Unicode Nd, exactly like bandcolors.js's ported regexes.
+// PLAIN_BAND_RE semantics: '$' matches before a single trailing \n
+// and \d is Unicode Nd, matching the bandcolors.js regexes.
 const PLAIN_BAND_RE = /^(\p{Nd}+)([A-Z])?(?=\n?$)/u;
 
 // (0, ((num, letter), ...)) for fully band-parsable cells, (1, cell) otherwise.
@@ -48,7 +43,7 @@ export function bandSortKey(cell) {
   return [0, pairs];
 }
 
-// int() over Nd digits (Python int() evaluates each Nd code point's value).
+// Integer value over Nd digits (each Nd code point contributes its digit value).
 function pyNdDigits(digits) {
   // ASCII fast path: band tokens are ASCII in practice. Number() rounds like
   // the BigInt -> Number conversion below, so the result is identical.
@@ -78,7 +73,7 @@ const ND_RUN_STARTS = [
 
 const cmpScalar = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-// Python tuple comparison over the key shapes: (kind, payload) where payload
+// Tuple comparison over the key shapes: (kind, payload) where payload
 // is a pair array (band columns), a number (numeric columns) or a string.
 // Positional compare, prefix-equal tuples: the shorter one is smaller.
 export function compareKeys(a, b) {
@@ -118,8 +113,8 @@ export function columnSortKey(col) {
   };
 }
 
-// filtered.sort(key=..., reverse=reverse) with Python's stable sort: reverse
-// flips the comparison, equal keys keep their original relative order.
+// Stable sort with the reverse flag flipping the comparison: equal keys keep
+// their original relative order.
 // Decorate-sort-undecorate: each row's key is computed exactly once (O(n))
 // instead of twice per comparison (O(n log n) regex + Nd parses). Comparator
 // and stability semantics are unchanged (modern engines sort stably; ties keep
@@ -131,7 +126,7 @@ export function sortRows(rows, col, reverse = false) {
   return decorated.map((d) => d.row);
 }
 
-// --- filter + count label (viewer.py:467-502) ------------------------------------
+// --- filter + count label --------------------------------------------------------
 
 // Lazily computes each row's casefolded "all cells joined" text and its
 // no-space variant once per tab, so repeated typing over a large table does not
@@ -200,7 +195,7 @@ export function countLabelText(rawQuery, shown, total, hasColumnFilters = false)
   return filtered ? `Showing ${fmt(shown)} of ${fmt(total)} combos` : `Total: ${fmt(total)} combos`;
 }
 
-// --- columns + banner (viewer.py:261, :183-197) -----------------------------------
+// --- columns + banner ------------------------------------------------------------
 
 export function visibleColumns(columns, showScs) {
   return columns.filter((c) => showScs || !c.includes("SCS"));
@@ -219,7 +214,7 @@ export function infoBannerParts(info) {
   return parts;
 }
 
-// --- memoized band colors (viewer.py:433-437, one color per canonical band) -------
+// --- memoized band colors (one color per canonical band) --------------------------
 
 const BAND_COLOR_MEMO = new Map();
 const BAND_INDEX_MEMO = new Map();
@@ -281,7 +276,7 @@ export function spacerHeights(total, start, end, rowHeight) {
   };
 }
 
-// Zebra stripe class by FILTERED index (viewer.py: evenrow when idx % 2 == 0).
+// Zebra stripe class by FILTERED index (evenrow when idx % 2 == 0).
 // Class-based so the virtualization spacer rows cannot shift parity.
 export function rowStripeClass(index) {
   return index % 2 === 0 ? "cv-row-even" : "cv-row-odd";
@@ -421,7 +416,7 @@ export class ComboViewer {
       btn.addEventListener("click", () => {
         this.activeKey = tblKey;
         this.renderTabs();
-        this.applyFilter(); // viewer.py _on_tab_changed -> apply_filter
+        this.applyFilter(); // re-apply filter on tab change
       });
       this.tabsEl.appendChild(btn);
     }
@@ -450,8 +445,8 @@ export class ComboViewer {
     const minChars = Math.max(4, Math.round(45 / this.charW));
     const widths = [];
     for (const col of visible) {
-      // Reserve room for the sort indicator like viewer.py _layout_columns;
-      // Tk measures characters, the HTML colgroup needs pixels.
+      // Reserve room for the sort indicator; measurement is in characters,
+      // the HTML colgroup needs pixels.
       const headerLen = charCount(col) + 2;
       let contentLen = 0;
       for (const r of state.rows) {
@@ -561,8 +556,8 @@ export class ComboViewer {
       state.sortCol = col;
       state.sortReverse = false;
     }
-    // viewer.py sort_column sorts the existing filtered list in place; the
-    // deterministic filter makes re-filter-then-sort an equivalent path that
+    // The existing filtered list is sorted in place; the deterministic filter
+    // makes re-filter-then-sort an equivalent path that
     // keeps the shared key function.
     state.filtered = sortRows(state.filtered, col, state.sortReverse);
     state.selected = new Set();
@@ -689,7 +684,7 @@ export class ComboViewer {
     this.applySelection();
   }
 
-  // --- copy actions (viewer.py:662-718, full column list like Tk) --------------
+  // --- copy actions (full column list) -----------------------------------------
 
   copyText(text) {
     navigator.clipboard.writeText(text).catch(() => this.flash("Copy failed: clipboard unavailable"));
@@ -729,7 +724,7 @@ export class ComboViewer {
     this.copyText(lines.join("\n"));
   }
 
-  // --- context menu (viewer.py:646-660) -----------------------------------------
+  // --- context menu --------------------------------------------------------------
 
   showContextMenu(event) {
     const state = this.tab();
@@ -776,7 +771,7 @@ export class ComboViewer {
     }
   }
 
-  // --- CSV export (viewer.py:720-753 via exporter.js) ----------------------------
+  // --- CSV export (via exporter.js) -----------------------------------------------
 
   exportCurrentTabCsv() {
     const state = this.tab();
@@ -829,7 +824,7 @@ export class ComboViewer {
     });
     this.scsCheck.addEventListener("change", () => {
       this.showScs = this.scsCheck.checked;
-      // viewer.py _on_scs_toggle: re-layout + re-render every tab, keep selection.
+      // SCS toggle: re-layout + re-render every tab, keep selection.
       for (const [tblKey, state] of this.tabs) {
         this.layoutColumns(state, tblKey);
         if (state === this.tab()) {
@@ -893,7 +888,7 @@ export class ComboViewer {
       document.addEventListener("mouseup", onUp);
     });
 
-    // Keyboard shortcuts (viewer.py:171-173).
+    // Keyboard shortcuts: Escape resets filters, Ctrl/Cmd+F focuses search.
     this.onKeydown = (event) => {
       if (event.key === "Escape") {
         this.hideContextMenu();

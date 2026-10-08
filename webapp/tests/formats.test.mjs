@@ -1,7 +1,7 @@
-// Detect-table parity with image_extractor.py:223-284: same order, same magic
+// Detect-table invariants: fixed order, same magic
 // offsets/bytes, same tag strings. Unsupported-container descriptors carry the
 // tool the Python extractor would have invoked (or null for the hard-rejected
-// F2FS/UBI branches, :480-493).
+// F2FS/UBI branches).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detect, UNSUPPORTED_TAGS, SUPPORTED_TAGS } from "../js/lib/formats.js";
@@ -13,8 +13,8 @@ test("magic detect table (plan verbatim cases)", () => {
 });
 
 test("unknown magics fall through the whole table", () => {
-  // CPRK is not a known container magic: image_extractor.py has no branch for
-  // it, so it must reach "unknown" (the plan sketch said BBCFG; Python is law).
+  // CPRK is not a known container magic: the detect table has no branch for
+  // it, so it must reach "unknown".
   assert.equal(detect(new Uint8Array([0x43, 0x50, 0x52, 0x4b])), "unknown");
   assert.equal(detect(new Uint8Array(0)), "empty");
 });

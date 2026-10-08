@@ -1,5 +1,5 @@
-// Minimal struct-style reader. Sizes: B=1 H=2 I=4 (all LE; nothing bigger exists in the port).
-// Supports Python repeat counts: "<12H" == twelve H fields.
+// Minimal struct-style reader. Sizes: B=1 H=2 I=4 (all LE; nothing bigger is needed).
+// Supports repeat counts: "<12H" == twelve H fields.
 const SIZES = { B: 1, H: 2, I: 4 };
 
 function expandFmt(fmt) {
@@ -74,8 +74,7 @@ export function indexOfBytes(hay, needle, from = 0) {
 }
 
 export function utf8(u8, start, end) {
-  // ignoreBOM: true means "keep a leading U+FEFF", matching Python's
-  // .decode("utf-8", "replace") which never strips it (default TextDecoder
-  // would swallow the EF BB BF prefix).
+  // ignoreBOM: true means "keep a leading U+FEFF" — replacement-mode decoding
+  // never strips it (default TextDecoder would swallow the EF BB BF prefix).
   return new TextDecoder("utf-8", { ignoreBOM: true }).decode(u8.subarray(start, end)); // replacement semantics match errors="replace"
 }

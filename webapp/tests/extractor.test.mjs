@@ -1,6 +1,6 @@
-// Container orchestration (image_extractor.py unwrap/EXTRACTORS ported to a
-// virtual file tree): tar incl. .tar.md5 tails, zip incl. the .bbfw member
-// filter, gzip, lz4, unsupported-container warnings, and the two corpus chains
+// Container orchestration over a virtual file tree: tar incl. .tar.md5 tails,
+// zip incl. the .bbfw member filter, gzip, lz4, unsupported-container
+// warnings, and the two corpus chains
 // in miniature (Motorola wrapper -> sparse -> ext4; tar -> lz4 -> FAT16).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -292,8 +292,8 @@ test("extractContainer rejects inputs below the 512-byte container floor", async
   await assert.rejects(() => openContainer(new Uint8Array(64), "tiny.bin"), /too small/i);
 });
 
-// SIDECAR_PATTERNS (image_extractor.py:45-50) compile without re.IGNORECASE;
-// RFCARD_PATTERN (:37-43) is the only case-insensitive one.
+// SIDECAR_PATTERNS compile without re.IGNORECASE;
+// RFCARD_PATTERN is the only case-insensitive one.
 test("sidecar matching is case-sensitive, rfcard candidate matching is not", () => {
   assert.ok(SIDECAR_RES.some((re) => re.test("rf_config_1306_0_0_combos.xml")));
   assert.ok(SIDECAR_RES.some((re) => re.test("rf_config_1306_0_0_combos_v2.txt")));

@@ -1,23 +1,17 @@
 // Apple C-series (C4000 / C4020) CR capability bank parser, audit, viewer
 // tables and DIAG (0xB0CD v41 / 0xB826 v22) export.
-// Function-for-function port of the Python reference in
-// apple-c-modem-parser/: cr_layout.py (layout tables + detect_layout),
-// apple_cr_parser.py (parse_bank + require_valid_bank), viewer.py
-// generate_combo_tables (:199-305) and apple_export.py (b0cd_blobs,
-// packetise_b0cd, b826 framing, DIAG hexdump text). Numeric semantics: all
-// multi-byte loads are little-endian DataView reads; the u64 candidate /
-// companion header fields stay BigInt until their bit fields are extracted
-// (every extracted field fits a double exactly).
+// Numeric semantics: all multi-byte loads are little-endian DataView reads;
+// the u64 candidate / companion header fields stay BigInt until their bit
+// fields are extracted (every extracted field fits a double exactly).
 //
-// The export helpers' dynamic ANTENNA_/BW_ extension tables (apple_export.py
-// module state) are created FRESH per exportAppleDiag call: the Python
-// reference's single-bank invocation (main.py CRxx.bin) starts from a pristine
-// module state, and the webapp exports one bank per operation — the golden
-// DIAG texts were generated under exactly that per-bank fresh state.
+// The export helpers' dynamic ANTENNA_/BW_ extension tables are created FRESH
+// per exportAppleDiag call: the webapp exports one bank per operation, and
+// the golden DIAG texts were generated under exactly that per-bank fresh
+// state.
 
 import { hex } from "./bytes.js";
 
-// --- cr_layout.py -----------------------------------------------------------------
+// --- layout tables and detect_layout -----------------------------------------------
 
 function makeTable(countOffset, base, stride, capacity) {
   return {
@@ -133,7 +127,7 @@ export function detectLayout(data) {
   return layout;
 }
 
-// --- apple_cr_parser.py constants -------------------------------------------------
+// --- parser constants --------------------------------------------------------------
 
 export const CLASS_MAP = { 1: ["A", 1], 2: ["B", 2], 3: ["C", 2], 4: ["D", 3], 5: ["E", 4], 6: ["F", 5] };
 const UL_CLASS_BASE = { 1: "A", 2: "B", 3: "C", 4: "D", 5: "E", 6: "F" };
@@ -248,7 +242,7 @@ function decodePerCcDescriptor(word, uplink) {
   };
 }
 
-// --- BandCapabilityTable (apple_cr_parser.py:115-161) ------------------------------
+// --- band capability table ---------------------------------------------------------
 
 function bandCapabilityTable(data, dv, layout) {
   const table = layout.bands;
@@ -296,7 +290,7 @@ function bandCapabilityTable(data, dv, layout) {
   return { count, records, by_band: byBand, encoding_violations: encodingViolations };
 }
 
-// --- LTECandidateTable (apple_cr_parser.py:168-236) --------------------------------
+// --- LTE candidate table ------------------------------------------------------------
 
 function lteCandidateTable(data, dv) {
   const count = dv.getUint32(LTE_COUNT_OFF, true);
@@ -373,7 +367,7 @@ function lteCandidateTable(data, dv) {
   return { count, records, ref_count: refCount, refs, refs_out_of_range: refsOutOfRange };
 }
 
-// --- physical rows + band properties (apple_cr_parser.py:332-389) ------------------
+// --- physical rows + band properties -----------------------------------------------
 
 function physicalRow(data, dv, index, layout) {
   const table = layout.physical;
@@ -431,7 +425,7 @@ function nrBandProperties(bandTable, band, includeSlot2) {
   };
 }
 
-// --- feature groups + UL catalog (apple_cr_parser.py:420-456) ----------------------
+// --- feature groups + UL catalog ----------------------------------------------------
 
 function featureGroup(data, dv, layout, index, uplink) {
   const table = uplink ? layout.ul_groups : layout.dl_groups;
@@ -459,9 +453,9 @@ function featureGroup(data, dv, layout, index, uplink) {
   return { index, raw_hex: hex(data.subarray(rawStart, rawStart + 0x14)), descriptor_refs: refs, per_cc: perCc };
 }
 
-// lte_feature_set (apple_cr_parser.py:454-475): resolve an LTE feature set
-// (EN-DC LTE leg) to per-CC descriptors. 6-byte row: [0] CC count (1..5),
-// then that many descriptor refs into the 4-byte LTE descriptor-word table.
+// Resolve an LTE feature set (EN-DC LTE leg) to per-CC descriptors. 6-byte
+// row: [0] CC count (1..5), then that many descriptor refs into the 4-byte
+// LTE descriptor-word table.
 function lteFeatureSet(data, dv, layout, index, uplink) {
   const table = uplink ? layout.lte_ul_feature_sets : layout.lte_dl_feature_sets;
   const count = dv.getUint32(table.count_offset, true);
@@ -504,7 +498,7 @@ function ulDescriptorCatalog(data, dv, layout) {
   return result;
 }
 
-// --- expand_feature_matrix (apple_cr_parser.py:459-541) ----------------------------
+// --- feature matrix expansion -------------------------------------------------------
 
 function expandFeatureMatrix(data, dv, layout, category, variant) {
   const table = layoutMatrix(layout, category);
@@ -534,7 +528,7 @@ function expandFeatureMatrix(data, dv, layout, category, variant) {
     const ulMatrixIndex = variant.ul_matrix_start + ordinal;
     const ulMatrixOob = ulMatrixIndex >= ulTableCount;
     // Both generations index the UL matrix for LTE legs; NR legs use it only
-    // on C4020 (the row attribute below stays C4020-only, like Python).
+    // on C4020 (the row attribute below stays C4020-only).
     const ulRawStart = !ulMatrixOob ? ulTable.base + ulMatrixIndex * 10 : -1;
     const components = [];
     const pairCount = Math.min(variant.components.length, groupIndices.length);
@@ -620,7 +614,7 @@ function expandFeatureMatrix(data, dv, layout, category, variant) {
   return result;
 }
 
-// --- expand_nr_candidate (apple_cr_parser.py:544-604) ------------------------------
+// --- NR candidate expansion ---------------------------------------------------------
 
 function expandNrCandidate(data, dv, layout, bandTable, cntCompanions, candidate, includeSlot2) {
   const header = candidate.header0; // BigInt
@@ -686,13 +680,13 @@ function expandNrCandidate(data, dv, layout, bandTable, cntCompanions, candidate
   };
 }
 
-// --- Fast inspect (apple_cr_parser.py inspect_bank:607-657) ----------------------
+// --- Fast inspect ------------------------------------------------------------------
 //
 // Header-only summary WITHOUT full combinatorial expansion: counts are the
 // EXPANDED PRE-DUEDUPE numbers (each base candidate expands through
 // companions; each companion contributes matrix_count feature-set rows == one
 // B826 row). These may differ from post-dedupe generateAppleTables row
-// counts — the python GUI displays the same pre-dedupe numbers.
+// counts — the UI displays the same pre-dedupe numbers.
 
 export function inspectAppleBank(data) {
   const layout = detectLayout(data);
@@ -744,7 +738,7 @@ export function inspectAppleBank(data) {
   };
 }
 
-// --- parse_bank (apple_cr_parser.py:660-728) ----------------------------------------
+// --- bank parse ---------------------------------------------------------------------
 
 export function parseAppleBank(data, name = null, includeSlot2 = true) {
   const layout = detectLayout(data);
@@ -758,7 +752,7 @@ export function parseAppleBank(data, name = null, includeSlot2 = true) {
   const cnt0x28 = dv.getUint32(NR_COUNT_OFF, true);
   const cnt0x1c = dv.getUint32(COMPANION_COUNT_OFF, true);
 
-  // Base NR / EN-DC candidates (AppleCRParser.__init__ candidate loop).
+  // Base NR / EN-DC candidates (candidate-table loop).
   const candidates = [];
   for (let i = 0; i < cnt0x28; i++) {
     const off = NR_BASE_OFF + i * NR_STRIDE;
@@ -768,7 +762,7 @@ export function parseAppleBank(data, name = null, includeSlot2 = true) {
     const hw = [];
     for (let k = 0; k < 10; k++) hw.push(dv.getUint16(off + 0x14 + k * 2, true));
     const cat = Number((h0 >> 5n) & 3n);
-    layoutMatrix(layout, cat); // throws for unsupported categories, like Python
+    layoutMatrix(layout, cat); // throws for unsupported categories
     const gate = Number((h0 >> 7n) & 1n);
     const totalCc = Number(h0 & 0x1fn);
     const bcsLte = Number((h0 >> 8n) & 0x1fn);
@@ -817,7 +811,7 @@ export function parseAppleBank(data, name = null, includeSlot2 = true) {
       component_count: comps.length,
       cc_sum_matches: sumCc === totalCc,
       structural_expression: expr,
-      // carried for expand_nr_candidate's error message (Python closes over the parser)
+      // carried for expandNrCandidate's error message
       profile_name: profile,
       profile_id: profileId,
     });
@@ -825,7 +819,7 @@ export function parseAppleBank(data, name = null, includeSlot2 = true) {
 
   const nr = candidates.map((c) => expandNrCandidate(data, dv, layout, bandTable, cnt0x1c, c, includeSlot2));
 
-  // Audit block (parse_bank's "audit" dict, same field names).
+  // Audit block; the field names are part of the output contract.
   let nrVariantCount = 0;
   let nrComponentVariantCount = 0;
   let nrFeatureVariantCount = 0;
@@ -948,7 +942,7 @@ export function parseAppleBank(data, name = null, includeSlot2 = true) {
   };
 }
 
-// AUDIT_ERROR_FIELDS + require_valid_bank (apple_cr_parser.py:731-745).
+// Audit fields that fail requireValidBank.
 const AUDIT_ERROR_FIELDS = [
   "lte_reference_oob", "nr_variant_range_oob", "unknown_ul_class_codes",
   "nr_feature_matrix_oob", "nr_ul_feature_matrix_oob", "nr_physical_row_oob",
@@ -963,7 +957,7 @@ export function requireValidBank(bank) {
   const errors = {};
   for (const key of AUDIT_ERROR_FIELDS) {
     const value = bank.audit[key];
-    // Python truthiness: an empty list (unknown_ul_class_codes) is falsy.
+    // Truthiness: an empty list (unknown_ul_class_codes) is falsy.
     const truthy = Array.isArray(value) ? value.length > 0 : Boolean(value);
     if (truthy) errors[key] = value;
   }
@@ -975,7 +969,7 @@ export function requireValidBank(bank) {
   }
 }
 
-// --- generate_combo_tables (viewer.py:190-305) --------------------------------------
+// --- viewer table generation ---------------------------------------------------------
 
 function compSortKey(comp, isUl = false) {
   let band;
@@ -988,7 +982,7 @@ function compSortKey(comp, isUl = false) {
   return [band, bwClass];
 }
 
-// Python sorted(key=..., reverse=True): stable, descending by tuple.
+// Stable descending sort by tuple.
 function byCompSortKeyDesc(isUl) {
   return (a, b) => {
     const [bandA, clsA] = compSortKey(a, isUl);
@@ -1001,8 +995,8 @@ function byCompSortKeyDesc(isUl) {
 const joinMimo = (comps, key) =>
   comps.map((c) => (c[key] ?? []).map(String).join("+") || "").join(" + ");
 
-// _per_cc_text (viewer.py:199-201): join per-CC values with '+', showing '?'
-// for anything the bank did not resolve.
+// Join per-CC values with '+', showing '?' for anything the bank did not
+// resolve.
 const perCcText = (values) =>
   values?.length ? values.map((v) => (v == null ? "?" : String(v))).join("+") : "?";
 
@@ -1120,11 +1114,11 @@ export function generateAppleTables(bank) {
   };
 }
 
-// --- DIAG export (apple_export.py) ---------------------------------------------------
+// --- DIAG export ----------------------------------------------------------------------
 
 export const CLASS_INDEX = { A: 1, B: 2, C: 3, D: 4, E: 5, F: 6 };
 
-// enum_assignments(): wire enum indices for bandwidth and antenna strings.
+// Wire enum indices for bandwidth and antenna strings.
 function enumAssignments() {
   const bwNames = [
     "DEFAULT", "5", "10", "15", "20", "20_20", "20_20_20", "20_20_20_20", "20_20_20_20_20",
@@ -1163,8 +1157,8 @@ const BW_EXTENSION_BASE = 66;
 const BW_EXTENSION_LIMIT = 127;
 const BW_EXTENSION_TUPLES = ["35_35", "45_45", "40_40_40", "100_40_40", "100_100_40"];
 
-// Fresh per-call wire-enum state (see the module port notes): the Python
-// module-level ANTENNA_ENUM / BW_ENUM extensions accumulate in encounter order.
+// Fresh per-call wire-enum state (see the module header notes): the
+// ANTENNA_/BW_ enum extensions accumulate in encounter order.
 function createWireEnums() {
   const ENUMS = enumAssignments();
   const ANTENNA_ENUM = {};
@@ -1178,7 +1172,7 @@ function createWireEnums() {
   BW_EXTENSION_TUPLES.forEach((name, i) => {
     const index = BW_EXTENSION_BASE + i;
     BW_ENUM[`BW_${name}`] = index;
-    bwExtensions.set(index, name); // pre-seeded: len(BW_EXTENSIONS) starts at 5
+    bwExtensions.set(index, name); // pre-seeded: the 5 fixed extension tuples
   });
 
   function antenna(layers) {
@@ -1251,7 +1245,7 @@ export function b826V22Component(bg) {
   return out;
 }
 
-// b0cd_blobs (keep_no_ul=True default, zero_ul_fields=False default).
+// keepNoUl=true and zeroUlFields=false defaults.
 export function b0cdBlobs(bank, wire, keepNoUl = true, zeroUlFields = false) {
   const blobs = [];
   for (const candidate of bank.lte_candidates) {
@@ -1259,7 +1253,7 @@ export function b0cdBlobs(bank, wire, keepNoUl = true, zeroUlFields = false) {
     const components = [];
     for (const c of candidate.components) {
       const ul = CLASS_INDEX[c.ul_class_letter] ?? 0;
-      const packed = new Uint8Array(7); // struct.pack("<HBBBBB", ...)
+      const packed = new Uint8Array(7); // "<HBBBBB": u16 band + 5 bytes
       const dv = new DataView(packed.buffer);
       dv.setUint16(0, c.band, true);
       packed[2] = CLASS_INDEX[c.class_letter] ?? 0;
@@ -1279,7 +1273,7 @@ export function b0cdBlobs(bank, wire, keepNoUl = true, zeroUlFields = false) {
   return blobs;
 }
 
-// packetise_b0cd: payloads with byte0=41 and byte1=combo_count.
+// Payloads with byte0=41 and byte1=combo_count.
 export function packetiseB0cd(blobs, packetCombos) {
   const packets = [];
   for (let i = 0; i < blobs.length; i += packetCombos) {
@@ -1304,7 +1298,7 @@ const bytesKey = (u8) => {
   return s;
 };
 
-// b826_source: 3 = EN-DC, 4 = NR-CA, 5 = NRDC (FR1+FR2).
+// B826 source: 3 = EN-DC, 4 = NR-CA, 5 = NRDC (FR1+FR2).
 function b826Source(components) {
   if (components.some((c) => c.rat === "LTE")) return 3;
   const ranges = new Set(components.map((c) => c.band > 256));
@@ -1332,7 +1326,7 @@ function ulTxSwitchType(bank, components) {
   return eq ? 1 : 0;
 }
 
-// nr_records: NR combination records for B826 v22 framing.
+// NR combination records for B826 v22 framing.
 function nrRecords(bank, wire, category, source) {
   const records = [];
   for (const candidate of bank.nr_candidates) {
@@ -1384,7 +1378,7 @@ function dedupe(items, keyFn) {
   return result;
 }
 
-// b826_v22_packets: frame combination records into complete DIAG packets.
+// Frame combination records into complete DIAG packets.
 function b826V22Packets(records, source, packetCombos) {
   const encoded = [];
   for (const { groups, ul_tx_switch_type } of records) {
@@ -1425,7 +1419,7 @@ function b826V22Packets(records, source, packetCombos) {
   return out;
 }
 
-// write_diag_hexdump as text: header lines + "# <label>\nPayload: <hex>\n\n".
+// DIAG hexdump as text: header lines + "# <label>\nPayload: <hex>\n\n".
 function diagText(packets) {
   const lines = [
     "# Headerless Qualcomm DIAG log payloads; one Payload block per complete wire payload.",
@@ -1446,7 +1440,7 @@ export function exportAppleDiag(parsed, format) {
     throw new Error(`Unsupported export format: ${format}`);
   }
   const stem = parsed.profile;
-  const wire = createWireEnums(); // fresh extension state per call (see port notes)
+  const wire = createWireEnums(); // fresh extension state per call (see module header notes)
   let packets;
   if (format === "b0cd") {
     const lte = dedupe(b0cdBlobs(parsed, wire, true, false), bytesKey);

@@ -1,8 +1,7 @@
-// Unit tests for the card-vs-card comparison logic ported from compare_ca.py
-// where it applies to card-vs-card: band-token extraction from web-table cells
-// (via bandcolors bandSegments canonicals), combo-set extraction (sorted
-// tuples, compare_ca.py:104-107), pair stats (CA-only jaccard/recall/precision,
-// compare_ca.py:169-176) and the LTE/NR band presence diff rows.
+// Unit tests for the card-vs-card comparison logic where it applies to
+// card-vs-card: band-token extraction from web-table cells (via bandcolors
+// bandSegments canonicals), combo-set extraction (sorted tuples), pair stats
+// (CA-only jaccard/recall/precision) and the LTE/NR band presence diff rows.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -71,7 +70,7 @@ test("pairStats ports compare_ca.py:169-176 (CA-only intersection/jaccard/recall
   assert.equal(stats.jaccard, 1);
   assert.equal(stats.recall, 1); // A is the reference
   assert.equal(stats.precision, 1);
-  // No CA combos at all -> all zeros (compare_ca guards len==0)
+  // No CA combos at all -> all zeros.
   const empty = pairStats(comboSetFromRows([], "LTE DL"), comboSetFromRows([{ "LTE DL": "1A" }], "LTE DL"));
   assert.deepEqual(empty, { inter: 0, jaccard: 0, recall: 0, precision: 0 });
 });

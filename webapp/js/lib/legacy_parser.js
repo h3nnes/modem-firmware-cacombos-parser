@@ -1,13 +1,11 @@
-// Port of the legacy ELF/RF-card parsing core: gui_version/legacy_rf_parser.py
-// (parsing-only; the Python CLI/IO parts are not ported) plus the legacy
-// orchestration from gui_version/qualcomm_rf_combo_analyzer.py
-// (_legacy_table_labels, _find_legacy_lte_array, _parse_legacy_lte_array,
-// parse_legacy). Byte-identical behaviour contract with the Python originals:
-// values, dict key insertion order, iteration order and error messages.
+// Legacy ELF/RF-card parsing core plus the legacy orchestration (table
+// labels, LTE array discovery, legacy module parse). Behaviour contract:
+// identical values, dict key insertion order, iteration order and error
+// messages.
 //
-// Python tuples return as JS arrays; Python None as null; dict keys keep the
-// exact Python snake_case spelling (the golden comparator checks key order).
-// Internal dataclass fields (Descriptor) are camelCase.
+// Output objects use snake_case keys and preserve key insertion order (the
+// golden comparator checks key order); the internal Descriptor class stays
+// camelCase.
 import { StructReader, indexOfBytes } from "./bytes.js";
 import { sha256Hex } from "./hash.js";
 import { Elf32Image, ParseError } from "./elf.js";
@@ -54,7 +52,7 @@ export const TABLE_DISPLAY = {
 
 const VERSION = "1.8.0";
 
-// B826 source enum per table (analyzer.py:60).
+// B826 source enum per table.
 const B826_SOURCE = { endc: 3, nr_ca: 4, nrdc: 5 };
 
 // Concat of Uint8Array chunks (same shape as the local helper in
@@ -1164,7 +1162,7 @@ export function parseDescriptor(path, data, descriptor, { discovery, tableKind, 
   };
 }
 
-// --- legacy orchestration (qualcomm_rf_combo_analyzer.py) --------------------
+// --- legacy orchestration ----------------------------------------------------
 
 function bytesInclude(blob, text) {
   const needle = [];
@@ -1408,8 +1406,8 @@ export function parseLegacyLteArray(record, blob, image) {
   };
 }
 
-// Approximates dataclasses.asdict(ModuleRecord) field order and defaults for a
-// plain {name, inner_path} record (full records pass their own fields through).
+// Approximates the module-record field order and defaults for a plain
+// {name, inner_path} record (full records pass their own fields through).
 function moduleFields(record) {
   return {
     inner_path: record.inner_path,
@@ -1428,7 +1426,7 @@ function moduleFields(record) {
   };
 }
 
-// Mirrors ModuleRecord.identity: literal firmware spelling of the file stem.
+// Literal firmware spelling of the file stem.
 function recordIdentity(record) {
   if (record.identity !== undefined) return record.identity;
   let stem = String(record.name).replace(/\.[^.]+$/, "");
@@ -1439,10 +1437,9 @@ function recordIdentity(record) {
 // dict.get(key, default) semantics: default applies only when the key is absent.
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
-// Port of analyzer.py _legacy_b0cd_packets (:682-718): pack every lte_ca
-// combination's band groups as <HBBBBB records, chunk 100 per 0xB0CD v41
-// packet. tableResults are [table, result] pairs exactly like Python's
-// `parsed`; packets return as [label, Uint8Array] pairs.
+// Pack every lte_ca combination's band groups as <HBBBBB records, chunk 100
+// per 0xB0CD v41 packet. tableResults are [table, result] pairs; packets
+// return as [label, Uint8Array] pairs.
 export function legacyB0cdPackets(tableResults, packetCombos = 100) {
   const encoded = [];
   for (const [table, result] of tableResults) {
@@ -1478,9 +1475,8 @@ export function legacyB0cdPackets(tableResults, packetCombos = 100) {
   return packets.map((payload, index) => [`LTE CA packet ${index + 1}/${packets.length}`, payload]);
 }
 
-// Port of analyzer.py _legacy_b826_packets (:721-764): feed endc/nr_ca/nrdc
-// tables to the shared b826V22Packets encoder with conservative defaults for
-// fields absent from the static records.
+// Feed endc/nr_ca/nrdc tables to the shared b826V22Packets encoder with
+// conservative defaults for fields absent from the static records.
 export function legacyB826Packets(tableResults) {
   const output = [];
   for (const [table, result] of tableResults) {

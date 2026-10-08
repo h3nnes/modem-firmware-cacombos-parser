@@ -1,5 +1,5 @@
-// Unit tests for the exporter filename builder (viewer.py:731-733) and the
-// plain download() helper's blob/revoke plumbing (DOM part is browser-only).
+// Unit tests for the exporter filename builder and the plain download()
+// helper's blob/revoke plumbing (DOM part is browser-only).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { csvFilename, TAB_LABELS } from "../js/exporter.js";

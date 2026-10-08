@@ -1,21 +1,21 @@
-// Stage-A + Stage-B port of mtk-drdi-combo-parser/mtk_universal.py:
+// Stage-A + Stage-B core:
 // module constants, Reporter, ROM dictionary discovery, Image/Bank records,
 // GridLoader (modern 12-byte descriptor matrix), FlatLoader (MD800 legacy
 // pointer-run family) and TensorCdfLoader (split CDF) from Stage A; from
 // Stage B the shared combo row model, the grammar parser
 // (CandidateNode/descriptor decode), FeatureResolver, profile decode, the
 // LTE CA row-table scanners, supported-band lists and the Tensor secondary
-// bank-8 decoder (mtk_tensor_secondary.py). Scan orchestration lives in
-// mtk_scan.js; the NR15 family (mtk_nr15.py) lives in mtk_nr15.js.
+// bank-8 decoder. Scan orchestration lives in
+// mtk_scan.js; the NR15 family lives in mtk_nr15.js.
 //
-// Scalar loops only (no numpy); the numpy prefilter variants of the python
-// collapse into the same bounds-checked scalar scans.
+// Scalar loops only; the vectorized-prefilter variants collapse into the same
+// bounds-checked scalar scans.
 //
 // Injection seams (stable API for Stage B):
 // - loader.capabilityBank(prove): `prove(image)` must return the candidate
 //   count (>= 1) when the image contains a structurally valid CandidateNode
-//   array, or null when the grammar rejects it (python's find_candidate_array
-//   raising UniversalError). Stage B installs it as
+//   array, or null when the grammar rejects it (raising UniversalError). Stage
+//   B installs it as
 //   (im) => { try { return parser.findCandidateArray(im)[2].count; } catch { return null; } }.
 //   capabilityBank() without a hook throws a dedicated configuration error.
 // - TensorCdfLoader creation is async (SHA-384 slot digests via crypto.subtle):
@@ -71,7 +71,7 @@ export const SUPPORTED_BAND_PAD = 0xfffd;
 const hex = (n) => "0x" + n.toString(16);
 
 function chk(data, off, size) {
-  // python struct.unpack_from bounds error, message-for-message.
+  // struct.unpack_from bounds error, message-for-message.
   if (off + size > data.length) {
     throw new Error(`unpack_from requires a buffer of at least ${off + size} bytes for unpacking ${size} bytes at offset ${off} (actual buffer size is ${data.length})`);
   }
@@ -173,7 +173,7 @@ const formatPyValue = (v) => {
   if (typeof v === "boolean") return v ? "True" : "False";
   if (v === null || v === undefined) return "None";
   if (v instanceof Uint8Array) {
-    // Python bytes repr: printable ASCII literal, everything else \xNN.
+    // bytes repr: printable ASCII literal, everything else \xNN.
     let out = "b'";
     for (const byte of v) {
       if (byte === 0x5c) out += "\\\\";
@@ -512,8 +512,7 @@ export class BaseLoader {
     this.tables = discoverRomTables(rom, rep);
     this.banks = [];
     // Full findCandidateArray results keyed by Image object: bank selection
-    // and extraction share one cache so the proof result is reused, exactly
-    // like the python loader._candidate_arrays dict keyed by id(im).
+    // and extraction share one cache so the proof result is reused.
     this._candidateArrays = new Map();
   }
 
@@ -527,7 +526,7 @@ export class BaseLoader {
 }
 
 function countBytes(hay, needle, start, end) {
-  // python bytes.count semantics: non-overlapping within [start, end).
+  // bytes.count semantics: non-overlapping within [start, end).
   let n = 0;
   let p = start;
   while (p < end) {
@@ -566,7 +565,7 @@ export function gridDiscover(loader, raw) {
   }
   if (cur.length >= 4) clusters.push(cur);
   if (!clusters.length) throw new UniversalError("raw bank-descriptor hits did not form a coherent table");
-  // max(clusters, key=len): python max returns the first maximal element.
+  // max(clusters, key=len): the first maximal element wins.
   let table = clusters[0];
   for (const c of clusters) if (c.length > table.length) table = c;
   // Require a uniform matrix: each distinct bank VA has same declared column count.
@@ -636,8 +635,8 @@ export class GridLoader extends BaseLoader {
 
   // Scan aligned descriptors once, without copying the ROM. The scan includes
   // a descriptor ending exactly at EOF and ignores an incomplete trailing
-  // word; bounds and runtime-address requirements are the scalar mirror of
-  // the python numpy prefilter.
+  // word; bounds and runtime-address requirements are enforced by the scalar
+  // scan itself.
   static descriptorHits(rom, drdi) {
     const hits = [];
     for (let off = 0; off < rom.length - 11; off += 4) {
@@ -854,7 +853,7 @@ export class TensorCdfLoader extends BaseLoader {
     if (!candidates.length) {
       throw new UniversalError("no CDF bank containing feature sentinels also contains a 100%-valid CandidateNode array");
     }
-    // max(key=(count, avg)): python max keeps the first maximal element.
+    // max(key=(count, avg)): the first maximal element wins.
     let best = candidates[0];
     for (const c of candidates) {
       if (c.bestCount > best.bestCount || (c.bestCount === best.bestCount && c.avg > best.avg)) best = c;
@@ -874,8 +873,8 @@ export class TensorCdfLoader extends BaseLoader {
 TensorCdfLoader.ALIAS = 0x60000000;
 
 // ---------------------------------------------------------------------------
-// Flat (MD800-class) legacy container: no 12-byte bank descriptor matrix
-// (python mtk_universal.FlatLoader). Profiles are regions of md1drdi, each
+// Flat (MD800-class) legacy container: no 12-byte bank descriptor matrix.
+// Profiles are regions of md1drdi, each
 // mounted at its own relocation; the geometry is recovered from two structural
 // facts: a profile's CandidateNode pointer array is a maximal run of runtime-
 // window words whose node objects immediately follow it (4-byte bias), and the
@@ -1099,9 +1098,9 @@ export class FlatLoader extends BaseLoader {
 }
 
 // ---------------------------------------------------------------------------
-// Stage B: shared combo row model (mtk_export.Combo and friends). Field names
-// mirror the python dataclasses so the Stage D exporters serialize rows
-// without translation; dedup/classification semantics are python-exact.
+// Stage B: shared combo row model. Field names are fixed so the Stage D
+// exporters serialize rows
+// without translation; dedup/classification semantics are pinned exactly.
 // ---------------------------------------------------------------------------
 
 // Physical carriers per LTE bandwidth class, indexed by the 0-based class byte.
@@ -1156,7 +1155,7 @@ export class MtkCombo {
   }
 }
 
-// Split a flat combo list into (endc, nrca, lte_only) — mtk_export.classify.
+// Split a flat combo list into (endc, nrca, lte_only).
 export function classify(combos, nrcaMinCcs = 1) {
   const endc = combos.filter((c) => c.kind === "ENDC");
   const nrca = combos.filter((c) => c.kind === "NR" && c.nr_physical_ccs >= nrcaMinCcs);
@@ -1164,7 +1163,7 @@ export function classify(combos, nrcaMinCcs = 1) {
   return [endc, nrca, lte];
 }
 
-// python combo_key tuple rendered as a stable string; field order is fixed so
+// Combo key rendered as a stable string; field order is fixed so
 // dedup is insertion-ordered keep-first (a Set would collapse structurally
 // equal rows identically, but the string keeps the key printable in diffs).
 export function comboKey(cb) {
@@ -1395,7 +1394,7 @@ export class GrammarParser {
     return hit[1];
   }
 
-  // Summary info shared by both discovery paths (python shape, differential-
+  // Summary info shared by both discovery paths (shape is differential-
   // pinned): the hinted path reports the same fields, with source flipped.
   _candidateArrayInfo(im, off, rows, rawrun, source) {
     let nrDesc = 0;
@@ -1781,7 +1780,7 @@ export function establishFeaturePairs(states, rep) {
     s.dl_table = best.dl;
     s.ul_table = best.ul;
     // score[1] is -exact_lengths; when nothing is exact that is -0, which
-    // python serializes as 0 — normalize so the JSON differential stays exact.
+    // the reference serializes as 0 — normalize so the JSON differential stays exact.
     s.feature_detail = {
       ...best.detail,
       score: best.score.slice().map((v) => (v === 0 ? 0 : v)),
@@ -1999,8 +1998,7 @@ export function parseLteRow36(im, off, tables) {
 // grid/CDF images use 32-byte rows, newer grid images the extended 36-byte
 // layout; layout selection is structural (scan every four-byte phase for each
 // stride, retain the longest fully valid run). A winning run's layout is also
-// recorded on the image (im.lte_row_layout) — python surfaces the same fact
-// through the lte_row_table info issue.
+// recorded on the image (im.lte_row_layout).
 export function scanLteRowsBank(bank, tables, rep) {
   const result = new Map();
   for (const im of bank.images) {
@@ -2242,8 +2240,8 @@ export function discoverSupportedBands(loader, cap, lteBank, rep) {
   const out = {};
   const lte = discoverSupportedBandList(loader, lteBank, "LTE", rep);
   const nr = discoverSupportedBandList(loader, cap, "NR", rep);
-  // python tests the returned dicts for truthiness; an empty JS object is
-  // truthy, so only non-empty lists are attached.
+  // An empty JS object is truthy (unlike an empty dict), so only non-empty
+  // lists are attached and callers can test key presence.
   if (Object.keys(lte).length) out.lte = lte;
   if (Object.keys(nr).length) out.nr = nr;
   return out;
@@ -2293,7 +2291,7 @@ export function serializeProfileSummary(states, perProfile) {
 }
 
 // ---------------------------------------------------------------------------
-// Tensor secondary bank decoder (port of mtk_tensor_secondary.py). Pixel/
+// Tensor secondary bank decoder. Pixel/
 // Tensor images keep the ordinary FR1 grammar in the capability bank but root
 // the FR2/NR-DC catalogue in a sibling bank (normally bank 8) via small
 // pointer tables in md1rom, with a different NR class-weight namespace.

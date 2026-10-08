@@ -1,26 +1,22 @@
-// Port of the Tk combo viewer's band-color layer, gui_version/viewer.py:
-// PALETTE (:25-34), BAND_COLUMN_HEADERS (:36-39), _BAND_RE/_PLAIN_BAND_RE
-// (:41-42), _column_band_prefix (:45-46), _band_spans (:49-66) and
-// _band_color (:102-105). Python-parity contract, note-for-note:
+// Band-color layer for the combo viewer: palette, band column headers, band
+// token regexes and the md5-based color mapping. Contract, note-for-note:
 //
 // - bandSpans(cell, header) -> [{start, end, canonical}]: one entry per band
 //   token in the " + "-joined cell. start/end are offsets into the cell string
-//   measured in code points (Python len()), covering the whole token. Tokens
-//   matching neither /^[Bn]<Nd>+[A-Z]?(before one trailing \n)/ nor
-//   /^<Nd>+[A-Z]?$/ are skipped but still advance the offset by len + 3.
-//   A prefixed token keeps its prefix as written ("B3A" -> "B3" even in an NR
-//   column); a plain token gets the column prefix ("B" iff the header contains
-//   "LTE", else "n"). header must be in BAND_COLUMN_HEADERS exactly
-//   (case-sensitive) or the result is [].
-// - bandColor(canonical) -> PALETTE index via the md5 digest read as a big-end
-//   128-bit integer mod 40 (viewer.py:104 int.from_bytes(digest, "big")), so
-//   the reduction runs on BigInt; a JS Number could not hold the digest.
+//   measured in code points, covering the whole token. Tokens matching neither
+//   /^[Bn]<Nd>+[A-Z]?(before one trailing \n)/ nor /^<Nd>+[A-Z]?$/ are skipped
+//   but still advance the offset by len + 3. A prefixed token keeps its prefix
+//   as written ("B3A" -> "B3" even in an NR column); a plain token gets the
+//   column prefix ("B" iff the header contains "LTE", else "n"). header must
+//   be in BAND_COLUMN_HEADERS exactly (case-sensitive) or the result is [].
+// - bandColor(canonical) -> PALETTE index via the md5 digest read as a
+//   big-endian 128-bit integer mod 40, so the reduction runs on BigInt; a JS
+//   Number could not hold the digest.
 // - bandSegments(cell, header) -> [{text, canonical|null}]: token-level view of
 //   the same split (null canonical = unparsable token) for HTML renderers;
 //   joining the texts with " + " reproduces the cell.
 // - bandColorFromCell(cell, header) -> color of the first band token, else
 //   null.
-// - _band_sort_key (viewer.py:69-83) is deliberately not ported here.
 import { md5Hex } from "./hash.js";
 
 export const PALETTE = [
@@ -41,8 +37,8 @@ export const BAND_COLUMN_HEADERS = [
 
 const BAND_COLUMN_HEADER_SET = new Set(BAND_COLUMN_HEADERS);
 
-// \p{Nd} matches Python str \d (Unicode category Nd); (?=\n?$) reproduces
-// Python's '$' matching before a single trailing newline.
+// \p{Nd} covers Unicode decimal digits (category Nd); (?=\n?$) matches before
+// a single trailing newline.
 const BAND_RE = /^([Bn]\p{Nd}+)[A-Z]?(?=\n?$)/u;
 const PLAIN_BAND_RE = /^(\p{Nd}+)([A-Z])?(?=\n?$)/u;
 
@@ -88,16 +84,16 @@ export function bandSegments(cell, header) {
   return tokens.map(({ token, canonical }) => ({ text: token, canonical }));
 }
 
-// Exact int(md5(s.encode("utf-8")).hexdigest(), 16) % m for positive integer m:
-// the 128-bit digest only ever touches BigInt.
+// Exact md5-of-UTF-8-bytes read as a 128-bit integer, reduced mod m (m a
+// positive integer): the digest only ever touches BigInt.
 export function md5IntMod(s, m) {
   return Number(BigInt("0x" + md5Hex(new TextEncoder().encode(s))) % BigInt(m));
 }
 
 // Palette index for a canonical band. The HTML viewer renders colors through
 // CSS classes `.band-c<index>` (viewer.js memoBandIndex) so large tbodies carry
-// no inline style attributes; bandColor keeps returning the hex for the Tk
-// parity tests and any non-class consumer.
+// no inline style attributes; bandColor keeps returning the hex for tests and
+// any non-class consumer.
 export function bandColorIndex(canonical) {
   if (typeof canonical !== "string") {
     throw new TypeError(`bandColor: canonical must be a string, got ${typeof canonical}`);

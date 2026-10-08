@@ -1,11 +1,9 @@
-// Read-only FAT16 reader for Qualcomm modem images; port of Fat16Image
-// (legacy_rf_parser.py:155-372) and _walk_fat (qualcomm_rf_combo_analyzer.py:139-158).
-// Works on any RandomAccessSource (source.js): read(offset, length) -> Promise<Uint8Array>.
+// Read-only FAT16 reader for Qualcomm modem images. Works on any
+// RandomAccessSource (source.js): read(offset, length) -> Promise<Uint8Array>.
 import { StructReader } from "./bytes.js";
 import { cp437Decode } from "./cp437.js";
 import { bump } from "./debug.js";
 
-// Same role as ParseError in legacy_rf_parser.py.
 export class ParseError extends Error {
   constructor(message) {
     super(message);
@@ -102,9 +100,8 @@ export class Fat16Image {
     return chain;
   }
 
-  // Raw cluster-chain read, mirror of _read_clusters (legacy_rf_parser.py:241).
-  // No size validation: Python's scan_source slices to the directory size
-  // itself (qualcomm_rf_combo_analyzer.py:226), so callers own the truncation.
+  // Raw cluster-chain read. No size validation: callers slice to the wanted
+  // size themselves, so callers own the truncation.
   async readClusters(firstCluster) {
     const chain = this.#clusterChain(firstCluster);
     return this.#readChainRange(chain, 0, chain.length * this.clusterSize);
@@ -185,7 +182,7 @@ export class Fat16Image {
     const base = raw.slice(0, 8);
     const ext = raw.slice(8, 11);
     if (base.length > 0 && base[0] === 0x05) base[0] = 0xe5;
-    const baseText = cp437Decode(base).trimEnd(); // Python .rstrip()
+    const baseText = cp437Decode(base).trimEnd();
     const extText = cp437Decode(ext).trimEnd();
     return baseText + (extText ? `.${extText}` : "");
   }
@@ -254,8 +251,8 @@ export class Fat16Image {
     return entries;
   }
 
-  // Pre-order DFS mirroring _walk_fat: descend into a directory as soon as it is
-  // seen; only files are yielded. `seen` guards against directory loops.
+  // Pre-order DFS: descend into a directory as soon as it is seen; only files
+  // are yielded. `seen` guards against directory loops.
   async walk() {
     if (!this.fat) throw new ParseError("Fat16Image not initialised: call await init() before walk().");
     if (this.walkMemo) return this.walkMemo;

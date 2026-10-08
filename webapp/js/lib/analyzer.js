@@ -1,17 +1,10 @@
-// Port of the analyzer orchestration: gui_version/qualcomm_rf_combo_analyzer.py.
-// Covered here: ModuleRecord + identity (:63-107), _matches_candidate and the
-// MODERN/LEGACY name regexes (:43-52), _parse_identity_token (:114-126),
-// scan_source (:161-255), _sort_records (:334-344), _deduplicate_records
-// (:347-383), _combo_counts (:1552-1619), parse_module dispatch (:1179-1184),
-// generate_web_tables with _normalize_legacy_component/_has_real_bcs and the
-// _format_* helpers (:1224-1501), _write_csv/_write_web_csvs (:1197-1221,
-// :1504-1525) and export_module (:1622-1701). The Excel ="..." formula guard
-// of the comparison CSV writer (:2543) is applied by csvField.
-// Container extraction (image_extractor.scan_container) is Task 9: until then
-// scanSource returns { records: [], warnings: [{ tool, message }] } for inputs
-// that are neither a named MBN nor a FAT16 image.
-// Python parity contract: identical values, dict key insertion order,
-// iteration order and message strings; goldens compare key order.
+// Analyzer orchestration: record identity + candidate name matching,
+// sort/dedup, per-record combo counts, FAT16 and container scanning,
+// web-table formatting and CSV/JSON/DIAG exports. scanSource returns
+// { records: [], warnings: [{ tool, message }] } for inputs that are neither
+// a named MBN nor a FAT16 image. Output values, dict key insertion order,
+// iteration order and message strings must stay identical; goldens compare
+// key order.
 import { sha256HexAsync } from "./hash.js";
 import { hex } from "./bytes.js";
 import { Fat16Image } from "./fat16.js";
@@ -46,25 +39,24 @@ export class ScanCancelled extends Error {
 
 // --- ModuleRecord -------------------------------------------------------------
 
-// Mirrors ModuleRecord.identity: literal firmware spelling of the file stem
-// (analyzer.py:79-86).
+// Literal firmware spelling of the file stem.
 export function recordIdentity(name) {
   let stem = pyStem(name);
   if (stem.slice(0, 10).toLowerCase() === "rf_config_") stem = stem.slice(10);
   return stem;
 }
 
-// Path(name).stem: strip the last suffix only ("a.b.c" -> "a.b").
+// Strip the last suffix only ("a.b.c" -> "a.b").
 function pyStem(name) {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
-// Python int() over regex-captured tokens: decimal IDs while accepting
-// hexadecimal alphabetic tokens (analyzer.py:114-121). pyNdInt/pyRegexFold are
-// shared with modern_parser.js: Python \d matches Unicode Nd and int()
-// evaluates Nd digits, so matching uses \p{Nd} with the re.IGNORECASE fold
-// pre-normalized and value evaluation via the Nd block table.
+// int()-style conversion over regex-captured tokens: decimal IDs while
+// accepting hexadecimal alphabetic tokens. pyNdInt/pyRegexFold are shared
+// with modern_parser.js: \p{Nd} matches Unicode Nd and int() evaluates Nd
+// digits, so matching uses \p{Nd} with the ignore-case fold pre-normalized
+// and value evaluation via the Nd block table.
 
 function parseIdentityToken(token) {
   const base = /[a-z]/i.test(token) ? 16 : 10;
@@ -76,10 +68,10 @@ function identityValue(match, field) {
   return token !== undefined ? parseIdentityToken(token) : 0;
 }
 
-// --- Python int()-style conversions used by the web-table formatting ----------
+// --- int()-style conversions used by the web-table formatting -----------------
 
-// Raises on null/undefined/non-integer strings exactly like int() does where
-// the Python callers rely on the exception (their try/except or crash paths).
+// Raises on null/undefined/non-integer strings exactly like int() does;
+// callers rely on the exception (their catch or crash paths).
 function pyInt(value) {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") {
@@ -99,12 +91,12 @@ const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 // dict.get(key, default) semantics: default applies only when the key is absent.
 const dictGet = (obj, key, fallback) => (hasOwn(obj, key) ? obj[key] : fallback);
 
-// --- name classification (analyzer.py:43-52, :129-136) ------------------------
+// --- name classification ------------------------------------------------------
 
 const MODERN_NAME_RE = /^rf_config_(?<hwid>\p{Nd}+)_(?<fsid>\p{Nd}+)_(?<bid>\p{Nd}+)(?:_(?<rev>\p{Nd}+))?\.mbn$/iu;
 const LEGACY_NAME_RE = /^(?<hwid>[0-9A-F]+)_(?<fsid>[0-9A-F]+)(?:_(?<bid>[0-9A-F]+))?\.mbn$/iu;
 
-// _matches_candidate: modern first, then legacy; named groups carry the IDs.
+// Modern first, then legacy; named groups carry the IDs.
 export function matchesCandidate(name) {
   const folded = pyRegexFold(name);
   let match = MODERN_NAME_RE.exec(folded);
@@ -114,15 +106,15 @@ export function matchesCandidate(name) {
   return null;
 }
 
-// --- sort + dedup (analyzer.py:334-383) ----------------------------------------
+// --- sort + dedup -------------------------------------------------------------
 
-// Python tuple comparison over exact ints: relational operators stay exact
-// for mixed Number/BigInt ids (subtraction throws on the mix), mirroring
-// _sort_records' arbitrary-precision tuple key (analyzer.py:334-344).
+// Tuple comparison over exact ints: relational operators stay exact for
+// mixed Number/BigInt ids (subtraction throws on the mix), matching the
+// arbitrary-precision tuple sort key.
 const pyCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 export function sortRecords(records) {
-  // sorted() with a tuple key; JS sort is stable, matching Python's guarantee.
+  // Tuple-key sort; JS sort is stable, so equal keys keep their original order.
   return [...records].sort((a, b) => {
     const ka = a.generation === "DAT/protobuf" ? 0 : 1;
     const kb = b.generation === "DAT/protobuf" ? 0 : 1;
@@ -140,10 +132,8 @@ export function sortRecords(records) {
 }
 
 export function deduplicateRecords(records) {
-  // (name, sha256) keep-first. A falsy digest keeps the record: Python's
-  // empty-digest fallback re-hashes via read_module and, on OSError, logs a
-  // warning and keeps the record (analyzer.py:360-373). The webapp cannot
-  // re-hash, so the fallback outcome is the parity behavior.
+  // (name, sha256) keep-first. A falsy digest keeps the record: the webapp
+  // cannot re-hash an empty digest, so it is never deduped away.
   const seen = new Set();
   const unique = [];
   for (const record of records) {
@@ -159,7 +149,7 @@ export function deduplicateRecords(records) {
   return unique;
 }
 
-// --- combo counts (analyzer.py:1552-1619) --------------------------------------
+// --- combo counts --------------------------------------------------------------
 
 export function comboCounts(record, blob) {
   try {
@@ -203,7 +193,7 @@ export function comboCounts(record, blob) {
   }
 }
 
-// --- parse_module dispatch (analyzer.py:1179-1184) ------------------------------
+// --- module dispatch ------------------------------------------------------------
 
 export function parseModule(record, blob) {
   if (record.generation === "DAT/protobuf" || record.generation === "XML DAT" || record.generation === "modern") {
@@ -215,10 +205,10 @@ export function parseModule(record, blob) {
   throw new ToolError(`Unknown RF-card format: ${record.generation}`);
 }
 
-// --- scan_source (analyzer.py:161-255) ------------------------------------------
+// --- source scanning ------------------------------------------------------------
 
 function buildRecord(base, lte, nr) {
-  // Field order mirrors the ModuleRecord dataclass declaration.
+  // Field order follows the module-record field declaration (output contract).
   return {
     inner_path: base.inner_path,
     name: base.name,
@@ -240,10 +230,10 @@ function buildRecord(base, lte, nr) {
 //
 // One card record per CR bank. Card identity = sha256 of the COMPRESSED
 // stream (the cardcache key); each bank is decompressed + header-inspected at
-// scan (python GUI parity: layout and expanded combo counts visible at load),
+// scan (layout and expanded combo counts visible at load),
 // while the full table parse stays deferred to card open (worker
 // appleBankMemo). Records stay unsorted/deduped here: descriptors are
-// already name-sorted like Python, and identical streams dedupe naturally
+// already name-sorted, and identical streams dedupe naturally
 // downstream (name\0sha256 card keys).
 
 const APPLE_CR_MAGIC = 0x32787662; // bvx2
@@ -295,7 +285,7 @@ async function scanAppleFtab(source, name, cancelled, { inspectAppleBankAsync, o
 
   const inspectBank = inspectAppleBankAsync ?? defaultInspectAppleBank;
   // Per-descriptor outcome (record or warning), emitted strictly in descriptor
-  // order: records must keep the name-sorted order (python parity) even though
+  // order: records must keep the name-sorted order even though
   // banks complete out of order under the pool.
   const outcomes = new Array(descriptors.length).fill(null);
   let emitIndex = 0;
@@ -320,7 +310,7 @@ async function scanAppleFtab(source, name, cancelled, { inspectAppleBankAsync, o
     if (batch.length || batchWarnings.length) emitBatch(batch, batchWarnings);
   };
 
-  // Decompress + fast-inspect each bank (python GUI parity: counts and layout
+  // Decompress + fast-inspect each bank (counts and layout
   // are visible at load). Full table parse stays deferred to card open. A bank
   // that fails to decompress/inspect is warned and skipped — never fatal.
   // Banks are independent units; the hook (pool) decides concurrency. The
@@ -418,8 +408,8 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
   const reportProgress = onScanProgress ?? (() => {});
   if (cancelled()) throw new ScanCancelled();
   // Direct-MBN fast path: a file whose NAME already matches a candidate regex.
-  // Python records inner_path/source_path as the absolute filesystem path; the
-  // browser has no path, so the file name stands in for it.
+  // There is no filesystem path in the browser, so the file name stands in
+  // for inner_path/source_path.
   const direct = matchesCandidate(name);
   if (direct) {
     const { generation, match } = direct;
@@ -475,8 +465,7 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
   try {
     await fat.init();
   } catch (err) {
-    // Not FAT16: the universal container extractor (analyzer.py:209-231,
-    // image_extractor.scan_container + _records_from_extraction :268-321).
+    // Not FAT16: fall back to the universal container extractor.
     try {
       return await scanExtracted(source, name, cancelled, reportProgress, onCandidate);
     } catch (extractErr) {
@@ -499,18 +488,17 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
   // the candidate list (and thus the count-stage total) is known upfront.
   // The gates below are the exact per-entry filters the old loop applied,
   // just hoisted: matchesCandidate non-null, and legacy ELF modules only
-  // under the modem's /so tree (analyzer.py:222-225).
+  // under the modem's /so tree.
   const entries = await fat.walk();
   const targets = [];
   for (const entry of entries) {
     // walk() entries carry the path only; the file name is the last segment
-    // (path = parent + "/" + entry.name in Python _walk_fat).
+    // (path = parent + "/" + entry.name).
     const fileName = entry.path.slice(entry.path.lastIndexOf("/") + 1);
     const matchInfo = matchesCandidate(fileName);
     if (!matchInfo) continue;
     const { generation, match } = matchInfo;
-    // Numeric legacy modules are meaningful only under the modem's /so tree
-    // (analyzer.py:222-225).
+    // Numeric legacy modules are meaningful only under the modem's /so tree.
     if (generation === "Legacy ELF" && !pyCasefold(entry.path).includes("/so/")) continue;
     targets.push({ entry, fileName, generation, match });
   }
@@ -520,9 +508,9 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
   for (let i = 0; i < targets.length; i++) {
     const { entry, fileName, generation, match } = targets[i];
     if (cancelled()) throw new ScanCancelled();
-    // Python reads the raw cluster chain and slices to the directory size
-    // (analyzer.py:226): no size validation, and the chain is walked even for
-    // size 0, so corrupt entries keep Python's outcomes exactly.
+    // The raw cluster chain is read and sliced to the directory size: no size
+    // validation, and the chain is walked even for size 0, so corrupt entries
+    // are read instead of being skipped.
     const raw = (await fat.readClusters(entry.firstCluster)).slice(0, entry.size);
     const digest = await sha256HexAsync(raw);
     const base = {
@@ -549,16 +537,16 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
   return { records: deduplicateRecords(sortRecords(records)), warnings: [] };
 }
 
-// --- container fallback (_records_from_extraction, analyzer.py:268-321) ---------
+// --- container fallback ---------------------------------------------------------
 
 async function scanExtracted(source, name, cancelled = () => false, onScanProgress = () => {}, onCandidate = null) {
   if (cancelled()) throw new ScanCancelled();
   // Extraction is the uncountable phase (a black-box unpacker with no known
   // output count); report it as its own stage so the UI can label the wait.
   onScanProgress?.({ stage: "extract" });
-  // Python: scan_container raises for inputs below the 512-byte container
-  // floor; extraction warnings (missing tools, unsupported containers) are
-  // collected alongside the records.
+  // Inputs below the 512-byte container floor raise; extraction warnings
+  // (missing tools, unsupported containers) are collected alongside the
+  // records.
   const { outputs, warnings } = await extractContainer(source, name);
   const { mbns, sidecars } = discoverCandidates(outputs);
   // Same gate hoist as the FAT16 path: pre-filter with the exact gates the
@@ -569,7 +557,7 @@ async function scanExtracted(source, name, cancelled = () => false, onScanProgre
     const matchInfo = matchesCandidate(vfile.name);
     if (!matchInfo) continue;
     const { generation, match } = matchInfo;
-    // Numeric legacy MBNs need a "so"/"rfcards" path segment (analyzer.py:279-289);
+    // Numeric legacy MBNs need a "so"/"rfcards" path segment;
     // the "rfcards" allowance exists for Apple BBCFG recovery.
     const parts = new Set(pyCasefold(path).split("/").filter(Boolean));
     if (generation === "Legacy ELF" && !parts.has("so") && !parts.has("rfcards")) continue;
@@ -604,16 +592,15 @@ async function scanExtracted(source, name, cancelled = () => false, onScanProgre
     onCandidate?.(record, blob);
     onScanProgress?.({ stage: "count", done: index + 1, total: targets.length });
   }
-  // Python returns the records in discovery order unsorted; the sorted order is
-  // identical for every golden record and deterministic across runs.
+  // The sorted order is identical to discovery order for every golden record
+  // and deterministic across runs.
   return { records: deduplicateRecords(sortRecords(records)), warnings };
 }
 
-// --- record_json (tools/generate_goldens.py:27-47) ------------------------------
+// --- record JSON ----------------------------------------------------------------
 
-// Extracted-container scratch dirs (tempfile.mkdtemp tags) are normalized to
-// the bare tag so goldens are deterministic; container records are Task 9 but
-// the rule is ported now.
+// Extracted-container scratch dirs (tool-generated tag prefixes) are
+// normalized to the bare tag so goldens are deterministic.
 const SCRATCH_DIR_RE = /^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z)_[A-Za-z0-9_]+$/;
 
 export function normalizeInnerPath(innerPath) {
@@ -640,19 +627,19 @@ export function recordJson(record) {
   };
 }
 
-// --- web-table formatting helpers (analyzer.py:1224-1322) -----------------------
+// --- web-table formatting helpers ----------------------------------------------
 
 export function formatScsVal(scsCode) {
   try {
     const c = pyInt(scsCode);
     if (c > 0) {
-      // Python str((1 << (c - 1)) * 15) is a plain decimal at any magnitude;
-      // doubles go exponential >= 1e21, so render via BigInt above 2**30 and
-      // take the fast Number path below it (exact up to 2**53).
+      // The value is a plain decimal at any magnitude; doubles go exponential
+      // >= 1e21, so render via BigInt above 2**30 and take the fast Number
+      // path below it (exact up to 2**53).
       return c - 1 > 30 ? (2n ** BigInt(c - 1) * 15n).toString() : String(2 ** (c - 1) * 15);
     }
   } catch {
-    // Python: int(None)/ValueError -> fall through
+    // int(None) ValueError -> fall through
   }
   return "15";
 }
@@ -666,7 +653,7 @@ export function formatQamVal(qamCode) {
 }
 
 export function formatBcs(bcsNum) {
-  // Python str(None) == "None".
+  // null/undefined stringify as "None".
   const s = String(bcsNum === null || bcsNum === undefined ? "None" : bcsNum).trim();
   return ["", "None", "-1"].includes(s) ? "All" : s;
 }
@@ -678,7 +665,7 @@ export function formatUlTxSwitch(switchType) {
     if (t === 2) return "option 2";
     if (t === 3) return "option 1,2";
   } catch {
-    // Python: int(None)/ValueError -> "-"
+    // int(None) ValueError -> "-"
   }
   return "-";
 }
@@ -720,9 +707,9 @@ export function componentSortKey(comp, isUl = false) {
   return [band, String(bwClass)];
 }
 
-// sorted(key=..., reverse=True) is stable in Python: equal keys keep their
-// original order, so the comparator swaps argument order instead of reversing
-// the sorted list.
+// Descending sort must stay stable (equal keys keep their original order),
+// so the comparator swaps argument order instead of reversing the sorted
+// list.
 function byComponentSortKeyDesc(isUl) {
   return (a, b) => {
     const [bandA, clsA] = componentSortKey(a, isUl);
@@ -765,7 +752,7 @@ export function normalizeLegacyComponent(comp) {
   return out ?? comp;
 }
 
-// --- generate_web_tables (analyzer.py:1325-1501) ---------------------------------
+// --- web-table generation --------------------------------------------------------
 
 const BAD_BW_CLASS = ["-", "0", "", "None"];
 
@@ -919,11 +906,11 @@ export function generateWebTables(combinations, components) {
   };
 }
 
-// --- CSV/JSON exports (analyzer.py:1191-1221, :1504-1525, :1622-1701) -----------
+// --- CSV/JSON exports ------------------------------------------------------------
 
-// Excel formula guard from the comparison CSV writer (:2543): f'="{value}"'
-// for formula-lookalike cells (the leading "=" is the marker; the payload is
-// wrapped), then csv-quoted (QUOTE_MINIMAL). Plain values pass through.
+// Excel formula guard: formula-lookalike cells (the leading "=" is the
+// marker) become ="..." with the payload wrapped, then csv-quoted
+// (QUOTE_MINIMAL). Plain values pass through.
 export function csvField(value) {
   if (value === null || value === undefined) return "";
   let s = typeof value === "string" ? value : String(value);
@@ -932,15 +919,15 @@ export function csvField(value) {
   return s;
 }
 
-// _cell: container values are JSON-dumped compactly (:1191-1194).
+// Container values are JSON-dumped compactly.
 function csvCell(value) {
   if (value === null || value === undefined) return "";
   if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value);
   return value;
 }
 
-// _write_csv: header is the first-seen key union over all rows, utf-8-sig BOM,
-// CRLF line endings, missing keys write empty fields.
+// Header is the first-seen key union over all rows, utf-8-sig BOM, CRLF line
+// endings, missing keys write empty fields.
 export function toCsvText(rows) {
   if (!rows || rows.length === 0) return null;
   const fields = [];
@@ -960,7 +947,7 @@ export function toCsvText(rows) {
   return "\uFEFF" + lines.join("\r\n") + "\r\n";
 }
 
-// _json_safe drops the diag section (:1187-1188).
+// Drops the diag section from the parsed result.
 function jsonSafe(parsed) {
   const out = {};
   for (const key of Object.keys(parsed)) {
@@ -969,12 +956,11 @@ function jsonSafe(parsed) {
   return out;
 }
 
-// export_module writes {stem}_all_combos.json (indent=2 + trailing newline),
+// Writes {stem}_all_combos.json (indent=2 + trailing newline),
 // {stem}_combinations.csv + {stem}_components.csv, the per-table web CSVs, and
-// the 0xB0CD/0xB826 DIAG payload hexdumps through writeDiagText. Python
-// returns written file paths; the browser needs the bytes, so every produced
-// file comes back as { filename, text }. "mbn" (raw blob dump) is handled by
-// the UI layer, which owns the blob.
+// the 0xB0CD/0xB826 DIAG payload hexdumps through writeDiagText. Every
+// produced file comes back as { filename, text }. "mbn" (raw blob dump) is
+// handled by the UI layer, which owns the blob.
 export function exportModule(record, parsed, format) {
   const stem = pyStem(record.name);
   const files = [];
@@ -1005,10 +991,8 @@ export function exportModule(record, parsed, format) {
   }
 
   if (format === "b0cd" || format === "b826") {
-    // export_module (:1680-1687): {stem}_0xB0CD_v41.txt / {stem}_0xB826_v22.txt
-    // via _write_diag (:1528-1541). Python indexes parsed["diag"][key]
-    // unconditionally (KeyError on a diag-less result); the JS port raises the
-    // shared ToolError style instead.
+    // {stem}_0xB0CD_v41.txt / {stem}_0xB826_v22.txt. A diag-less parsed result
+    // raises the shared ToolError instead of failing on a missing key.
     const logCode = format === "b0cd" ? "0xB0CD" : "0xB826";
     const version = format === "b0cd" ? 41 : 22;
     const packets = parsed.diag && parsed.diag[format];
@@ -1022,9 +1006,9 @@ export function exportModule(record, parsed, format) {
   throw new ToolError(`Unsupported export format: ${format}`);
 }
 
-// _write_diag (:1528-1541) minus the file IO: "\n".join(lines) with a blank
-// line after every packet, ASCII-only by construction. The payload hex uses
-// the bytes.js lowercase hex() exactly like Python's bytes.hex().
+// DIAG text writer (no file IO): lines joined with "\n", a blank line after
+// every packet, ASCII-only by construction. The payload hex uses the bytes.js
+// lowercase hex().
 function writeDiagText(logCode, version, packets) {
   const lines = [
     "# Headerless Qualcomm DIAG payloads reconstructed from static RF tables.",

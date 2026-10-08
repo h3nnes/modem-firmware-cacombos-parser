@@ -451,9 +451,8 @@ async function readRecordBlob(sourceId, file, source, record) {
 
 // Blob + memo entry for a record: extracts the raw blob once per sourceId via the
 // (name, sha256) memo key. No parsing happens here — a pure "mbn" export must
-// be a byte-for-byte extraction that never invokes the parser
-// (qualcomm_rf_combo_analyzer.py export_module: a pure MBN dump "must not
-// invoke either the legacy or modern parser").
+// be a byte-for-byte extraction that never invokes the parser (a pure MBN
+// dump "must not invoke either the legacy or modern parser").
 async function ensureBlob(sourceId, fileIndex, record) {
   const { file, source } = sourceEntry(sourceId);
   let memo = parseMemo.get(sourceId);
@@ -546,7 +545,7 @@ async function ensureAppleParsed(sourceId, fileIndex, record) {
   if (!entry.parsed) {
     bump("parseAppleBank");
     entry.parsed = parseAppleBank(entry.bank, record.inner_path);
-    requireValidBank(entry.parsed); // main.py flow: parse_bank + require_valid_bank before any use
+    requireValidBank(entry.parsed); // validate right after parse, before any use
   }
   return { bank: entry.bank, parsed: entry.parsed };
 }
@@ -668,9 +667,9 @@ async function exportAppleFiles(sourceId, fileIndex, record, format) {
 // Export dispatch for MTK DRDI records (spec §3). mbn = the raw profile image
 // slice (pure dump, no parse, mirrors the apple bank dump); json/csv/webcsv
 // mirror the apple model over the MTK viewer tables; b0cd/b826/mtk_nr/mtk_lte
-// are the byte-exact ports of mtk_export.py / mtk_trace.js.
+// are the byte-exact wire/text formats.
 //
-// Format gating mirrors python's run_bank_extraction: b826/mtk_nr need the
+// Format gating: b826/mtk_nr need the
 // card's capability combos, b0cd/mtk_lte need its LTE CA row rows — a card
 // lacking a side (bank-only LTE row profiles on Tensor images) produces NO
 // file for that format (the batch export loop tolerates the empty reply).
@@ -734,8 +733,8 @@ function mtkCardStem(sourceId, record) {
     + `_bank${record.mtk.bankIndex}_profile${record.mtk.profile}`;
 }
 
-// The image stem (python Path(name).stem) — the "Device:" value every MTK
-// export text embeds and the golden differential keys on.
+// The image stem (name without directory or extension) — the "Device:" value
+// every MTK export text embeds and the golden differential keys on.
 function mtkDeviceName(sourceId, record) {
   const name = record.source_path || sourceEntry(sourceId).file.name || "";
   return name.split("/").pop().replace(/\.[^.]+$/, "");
@@ -976,7 +975,7 @@ async function handleExport(msg) {
     // through exportMtkFiles (the qcom mbn special-case below stays untouched).
     files = await exportMtkFiles(msg.sourceId, msg.fileIndex, msg.record, msg.format);
   } else if (msg.format === "mbn") {
-    // Raw .mbn dump (Python export_module "mbn"): the untouched blob under
+    // Raw .mbn dump: the untouched blob under
     // record.name — byte-for-byte, no parse, no text encoding. Reuses the
     // ensureBlob path incl. the per-source memo, so a batch that also exports
     // text formats extracts the container exactly once.

@@ -1,5 +1,5 @@
 // CRC32 (zlib-compatible) + SHA-384 for the MTK parsers: Android sparse images
-// verify CRC32 exactly like python's zlib.crc32, and the tensor split-CDF
+// verify CRC32 exactly like zlib.crc32, and the tensor split-CDF
 // header verifies 640 SHA-384 slot digests. SHA-384 is async, mirroring the
 // sha256HexAsync convention in hash.js (native crypto.subtle first, pure-JS
 // FIPS 180-4 fallback for insecure contexts).

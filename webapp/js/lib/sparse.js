@@ -1,8 +1,7 @@
-// Android sparse image support: header parse + validation (port of
-// image_extractor.py:147-210), a chunk-table SparseReader that implements the
-// RandomAccessSource interface WITHOUT materializing the unsparsed image, and
-// scanForSparse for OEM-wrapped images (Motorola SINGLE_N_LONELY, :153-156,
-// :679-684 + _unwrap_embedded_containers :712-729).
+// Android sparse image support: header parse + validation, a chunk-table
+// SparseReader that implements the RandomAccessSource interface WITHOUT
+// materializing the unsparsed image, and scanForSparse for OEM-wrapped
+// images (e.g. Motorola SINGLE_N_LONELY wrappers).
 //
 // Chunk header layout was decoded empirically from corpus radio.img (12
 // chunks, per-chunk block counts summing to totalBlocks): <HHII>
@@ -39,7 +38,7 @@ export function parseSparseHeader(headerBytes) {
   };
 }
 
-// The same validation _sparse_headers applies before reporting an offset.
+// The validation applied before reporting a header offset.
 export function validSparseHeader(h) {
   return (
     h.magic === SPARSE_MAGIC &&
@@ -53,12 +52,11 @@ export function validSparseHeader(h) {
   );
 }
 
-// Port of _sparse_headers (:150-210): chunked ~1MB scan reporting every valid
-// sparse header offset (max `maxOffsets`). Deliberate fix over the Python
-// loop's handle bookkeeping: windows overlap by 28 bytes and found offsets are
+// Chunked ~1MB scan reporting every valid sparse header offset (max
+// `maxOffsets`). Windows overlap by 28 bytes and found offsets are
 // de-duplicated, so boundary-straddling headers are found and every reported
 // offset is the true absolute one. On corpus radio.img this returns exactly
-// [13568], matching the Python scanner.
+// [13568].
 export async function scanForSparse(source, fileSize, maxOffsets = 8) {
   const offsets = [];
   if (fileSize < 28) return offsets;

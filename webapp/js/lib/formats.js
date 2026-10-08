@@ -1,11 +1,9 @@
-// Port of the container detection table: gui_version/image_extractor.py:223-284.
-// Same branch order, same magic offsets/bytes, same tag strings. Tags routed to
-// an in-house reader are listed in SUPPORTED_TAGS; every remaining tag gets an
-// UNSUPPORTED_TAGS descriptor naming the external tool the Python extractor
-// would have invoked (extract_ext4/erofs/7z/super/payload :322-477, plus the
-// hard-rejected f2fs/ubi branches :480-493).
-// xz/zstd are supported by CPython (stdlib lzma / optional zstandard) but have
-// no browser decoder, so they stay unsupported here.
+// Container detection table: same branch order, magic offsets/bytes and tag
+// strings throughout. Tags routed to an in-house reader are listed in
+// SUPPORTED_TAGS; every remaining tag gets an UNSUPPORTED_TAGS descriptor
+// naming the external tool that would handle it (ext4/erofs/7z/super/payload,
+// plus the hard-rejected f2fs/ubi).
+// xz/zstd have no browser decoder, so they stay unsupported here.
 
 const MAGIC_MAX = 4096;
 
@@ -38,13 +36,13 @@ function findBytes(head, bytes, limit) {
   return -1;
 }
 
-// Path(name).suffix.lower(): the last dot suffix including the dot.
+// The last dot suffix including the dot, lowercased.
 function pySuffix(name) {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot).toLowerCase() : "";
 }
 
-// OEM name field at offset 3, rstrip(b"\x00 ") before comparison (:273).
+// OEM name field at offset 3, trailing NULs/spaces stripped before comparison.
 function fatOem(head) {
   let end = 11;
   while (end > 3 && (head[end - 1] === 0 || head[end - 1] === 0x20)) end--;
@@ -66,7 +64,7 @@ export function detect(head, name = "") {
   if (startsWith(head, [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00])) return "xz";
   if (startsWith(head, [0x28, 0xb5, 0x2f, 0xfd])) return "zstd";
   if (startsWith(head, [0x04, 0x22, 0x4d, 0x18])) return "lz4";
-  // Apple baseband config container; checked before the archive tags (:247-250).
+  // Apple baseband config container; checked before the archive tags.
   if (startsWith(head, [0x00, 0x47, 0x46, 0x43]) || findBytes(head, [0x42, 0x42, 0x43, 0x46, 0x47, 0x4d, 0x42, 0x4e], 64) !== -1) return "bbcfg";
   if (startsWith(head, [0x50, 0x4b, 0x03, 0x04]) || pySuffix(name) === ".bbfw" || pySuffix(name) === ".ipsw") return "zip";
   if (startsWith(head, [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c])) return "7z";
@@ -91,8 +89,8 @@ export function readMagicHead(source) {
   return source.read(0, Math.min(MAGIC_MAX, source.size));
 }
 
-// _have(cmd)-style descriptors: the webapp has no subprocess, so extraction
-// beyond the in-house readers reports the missing tool instead.
+// Tool descriptors: the webapp has no subprocess, so extraction beyond the
+// in-house readers reports the missing tool instead.
 export const UNSUPPORTED_TAGS = {
   payload: { tool: "payload-dumper-go", message: "looks like an OTA payload; install payload-dumper-go or the 'payload_dumper' Python package and rerun." },
   super: { tool: "lpunpack", message: "Android dynamic partition (super) image; lpunpack is not available in the browser." },

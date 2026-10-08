@@ -1,14 +1,10 @@
-// Port of gui_version/iphone_rf_parser.py (Apple baseband RF-card recovery
-// from BBCFG containers) plus the EFS pathname scan that
-// image_extractor.extract_bbcfg runs inline (:551-593).
+// Apple baseband RF-card recovery from BBCFG containers plus the EFS
+// pathname scan that the bbcfg extractor runs inline.
 //
-// Parity note on _read_tlv (:127-144): the guard is written as
-// `blob[pos] & 0x1F == 0x1F`, which in Python parses as
-// `blob[pos] & (0x1F == 0x1F)` == `blob[pos] & 1` (comparison binds tighter
-// than bitwise-and). The quirk is reproduced verbatim: single-byte tags with
-// odd values (e.g. the 0xA9 blob-store tag) are parsed as multi-byte tags and
-// never match, so real containers take the MAVZ byte-scan fallback
-// (:199-231) — exactly like CPython does.
+// BER tag guard: the tag-is-multibyte check is intentionally `blob[pos] & 1`
+// (odd low bit), NOT `& 0x1F`: single-byte tags with odd values (e.g. the
+// 0xA9 blob-store tag) are parsed as multi-byte tags and never match, so
+// real containers take the MAVZ byte-scan fallback.
 import { Elf32Image } from "./elf.js";
 import { rfcardNameFromSymbols } from "./legacy_parser.js";
 import { sha256Hex } from "./hash.js";
@@ -45,7 +41,7 @@ function u32le(blob, pos) {
 }
 
 // Latin-1 decode: bijective byte <-> char mapping so string offsets are byte
-// offsets and the byte-oriented regexes behave like their Python rb"" twins.
+// offsets and byte-oriented regexes work directly on strings.
 export function latin1(u8, start = 0, end = u8.length) {
   let s = "";
   const CHUNK = 0x8000;
@@ -65,20 +61,20 @@ function indexOfBytes(hay, needle, from = 0, to = hay.length) {
   return -1;
 }
 
-// RES_DAT_RE/CMN_DAT_RE (:83-86) as latin1 string regexes; \d matches the same
-// ASCII digits and the search semantics (first match) are identical.
+// latin1 string regexes for the res/cmn DAT paths; \d matches ASCII digits
+// and the search semantics (first match) are identical.
 const RES_DAT_RE = /\/rfc\/(\d+)_(\d+)_res\.dat/;
 const CMN_DAT_RE = /\/rfc\/(\d+)_(\d+)_cmn\.dat/;
 const LEGACY_RFCARD_RE = /^rfc_hwid(\d+)(?:_|$)/i;
 const CONTENT_NAME_RE = /[0-9a-f]{40}/g;
 
-// --- BER helpers (:127-155) -----------------------------------------------------
+// --- BER helpers -----------------------------------------------------------------
 
 export function readTlv(blob, pos) {
   const start = pos;
   if (blob[pos] === undefined) throw new IPhoneRFError("BER tag out of range");
-  // Python precedence quirk preserved: `blob[pos] & 0x1F == 0x1F` is
-  // `blob[pos] & 1` (see file header note).
+  // Deliberate quirk: the tag check is `& 1`, not `& 0x1F` (see file header
+  // note).
   if ((blob[pos] & 1) === 1) {
     pos += 1;
     while (blob[pos] !== undefined && (blob[pos] & 0x80) !== 0) pos += 1;
@@ -101,7 +97,7 @@ export function readTlv(blob, pos) {
   return { tag, length, body: pos };
 }
 
-// _walk (:147-155): yields { tag, offset, length, body } for [start, end).
+// Yields { tag, offset, length, body } for [start, end).
 function* walkTlv(blob, start, end) {
   let pos = start;
   while (pos < end) {
@@ -112,7 +108,7 @@ function* walkTlv(blob, start, end) {
   }
 }
 
-// --- container access (:163-242) --------------------------------------------------
+// --- container access --------------------------------------------------------------
 
 export function isBbcfg(blob) {
   return blob.length >= 0x31 && regionEquals(blob, 0x28, BBCFG_MARKER);
@@ -126,9 +122,9 @@ export function containerInfo(blob, sha256 = null) {
   return { fourcc, version, payload_size: declared, size: blob.length, sha256 };
 }
 
-// _store_bounds (:183-196): (start, end) of the tag-0xA9 store body, or null.
-// Because of the tag quirk the store record never matches on real firmware and
-// the MAVZ scan below is the effective path (as in CPython).
+// (start, end) of the tag-0xA9 store body, or null. Because of the tag quirk
+// the store record never matches on real firmware and the MAVZ scan below is
+// the effective path.
 function storeBounds(blob) {
   try {
     for (const rec of walkTlv(blob, RECORDS_START, blob.length)) {
@@ -163,7 +159,7 @@ export function iterStoreBlobs(blob) {
   return out;
 }
 
-// _scan_mavz_blobs (:224-231): MAVZ payloads without the record grammar.
+// MAVZ payloads without the record grammar.
 function* scanMavzBlobs(blob) {
   let index = 0;
   let pos = 0;
@@ -178,9 +174,9 @@ function* scanMavzBlobs(blob) {
   }
 }
 
-// decompress_mavz (:233-242): zlib.decompressobj semantics — the adler32
-// trailer is consumed and verified, unused_data is everything after the
-// stream. inflateZlibChecked (modern_parser.js) provides exactly that.
+// MAVZ decompression: the adler32 trailer is consumed and verified;
+// unused_data is everything after the stream. inflateZlibChecked
+// (modern_parser.js) provides exactly that.
 export function decompressMavz(blob, offset) {
   const declared = u32le(blob, offset + 4);
   const data = blob.subarray(offset + 8);
@@ -192,7 +188,7 @@ export function decompressMavz(blob, offset) {
   return { raw, compressedLen };
 }
 
-// --- RF card recovery (:250-321) ---------------------------------------------------
+// --- RF card recovery ----------------------------------------------------------------
 
 function legacyRfcardIdentity(raw) {
   if (!regionEquals(raw, 0, ELF32_MAGIC)) return null;
@@ -267,10 +263,10 @@ export function* iterRfcards(blob) {
   }
 }
 
-// --- extraction (:371-403) -----------------------------------------------------------
+// --- extraction -----------------------------------------------------------------------
 
-// extract_rfcards + _write_sidecars: cards land in outDir/rfcards/ next to the
-// rfcard_info_all sidecars (which SIDECAR_PATTERNS then attach per record).
+// Cards land in outDir/rfcards/ next to the rfcard_info_all sidecars (which
+// the analyzer's sidecar scan then attaches per record).
 export async function extractBbcfgTree(blob, outDir, addFile) {
   const rfcards = outDir.dir("rfcards");
   const cards = [];
@@ -310,7 +306,7 @@ function asRow(card) {
 
 async function writeSidecars(cards, rfcardsDir, blob, addFile) {
   const rows = cards.map(asRow);
-  // CSV: csv.DictWriter defaults (QUOTE_MINIMAL, \r\n terminator).
+  // CSV: QUOTE_MINIMAL, \r\n terminator.
   const fields = Object.keys(rows[0]);
   const cell = (v) => {
     let s = v === null || v === undefined ? "" : String(v);
@@ -333,10 +329,8 @@ async function writeSidecars(cards, rfcardsDir, blob, addFile) {
   addFile(rfcardsDir, "rfcard_info_all.json", info, undefined, "text");
 }
 
-// The EFS pathname/value scan image_extractor.extract_bbcfg runs after card
-// recovery (image_extractor.py:551-593, tags 9f8374/9f8376 with _ber_length
-// :505-520). Note this is NOT iphone_rf_parser.extract_efs_items (no dedup,
-// writes into the bbcfg workdir root).
+// EFS pathname/value scan (tags 9f8374/9f8376) run after card recovery; it
+// writes into the bbcfg workdir root and does not dedup.
 export function extractEfsPathnames(blob, outDir, addFile) {
   let written = 0;
   let pos = 0;
@@ -380,7 +374,6 @@ export function extractEfsPathnames(blob, outDir, addFile) {
   return written;
 }
 
-// _ber_length (image_extractor.py:505-520).
 function berLength(blob, pos) {
   if (pos >= blob.length) return { length: null, body: pos };
   const first = blob[pos];

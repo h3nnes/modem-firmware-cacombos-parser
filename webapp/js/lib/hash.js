@@ -1,4 +1,4 @@
-// Pure sync sha256 (FIPS 180-4) and md5 (RFC 1321), Python hashlib parity.
+// Pure sync sha256 (FIPS 180-4) and md5 (RFC 1321).
 // Accepts Uint8Array (plain arrays also work via .set/.length). Output: lowercase hex.
 import { hex } from "./bytes.js";
 

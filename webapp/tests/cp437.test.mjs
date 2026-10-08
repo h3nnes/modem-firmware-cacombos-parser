@@ -5,7 +5,7 @@ import { cp437Decode, lfnName } from "../js/lib/cp437.js";
 test("cp437 high-half mapping", () => {
   assert.equal(cp437Decode([0x41, 0x9c]), "A£");
   assert.equal(cp437Decode(new Uint8Array([0x80])), "Ç");
-  assert.equal(cp437Decode(new Uint8Array([0xe9])), "Θ"); // plan said é (0xe9) — plan bug; é is 0x82, python-decoded table wins
+  assert.equal(cp437Decode(new Uint8Array([0xe9])), "Θ"); // é is 0x82 in CP437; 0xe9 is Θ
   assert.equal(cp437Decode(new Uint8Array([0x82])), "é");
 });
 

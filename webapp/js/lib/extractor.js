@@ -1,20 +1,17 @@
-// Container orchestration: port of gui_version/image_extractor.py's
-// unwrap recursion (:663-729) and EXTRACTORS dispatch (:641-660) onto a
-// virtual file tree. Python stages materialize sibling scratch dirs under one
-// workdir root (tempfile.mkdtemp(prefix=f"{tag}_", dir=ctx.workdir) at
-// :107-108); the mirror creates sibling virtual dirs named `<tag>_<n>` under a
-// single root, and MBN paths are recorded relative to that root. The
-// analyzer's record_json SCRATCH_DIR_RE then normalizes `sparse_<n>/...` to
-// the golden `sparse/...` first component exactly as the Python goldens do.
+// Container orchestration: recursive unwrap and per-tag extractor dispatch
+// over a virtual file tree. Stages materialize sibling virtual dirs named
+// `<tag>_<n>` under a single root, and MBN paths are recorded relative to
+// that root. The analyzer's record_json SCRATCH_DIR_RE then normalizes
+// `sparse_<n>/...` to the golden `sparse/...` first component.
 //
-// In-house replacements for external tools (approved plan deviations):
-//   extract_sparse 7z path -> SparseReader + Fat16Image/Ext4Image tree walk
+// In-house readers replace the external tools:
+//   sparse 7z path        -> SparseReader + Fat16Image/Ext4Image tree walk
 //     (radio.img's sparse payload is an ext4 filesystem - verified against
-//     7-Zip and the goldens; tree lands in the sparse workdir, :301-312)
-//   extract_ext4 debugfs   -> ext4.js tree walk (same workdir shape :322-332)
-//   extract_fat/fat_or_mbr 7z -> Fat16Image walk (:646-647)
-//   extract_lz4 CLI/lz4.frame -> lz4.js (:414-432)
-//   extract_gzip gzip module  -> DecompressionStream (:366-374)
+//     7-Zip and the goldens; the tree lands in the sparse workdir)
+//   ext4 debugfs          -> ext4.js tree walk (same workdir shape)
+//   fat/fat_or_mbr 7z     -> Fat16Image walk
+//   lz4 CLI/lz4.frame     -> lz4.js
+//   gzip module           -> DecompressionStream
 // Everything without an in-house reader surfaces an UNSUPPORTED_TAGS warning.
 import { detect, UNSUPPORTED_TAGS, SUPPORTED_TAGS } from "./formats.js";
 import { SparseReader, scanForSparse } from "./sparse.js";
@@ -36,9 +33,8 @@ const MIN_CONTAINER_SIZE = 512;
 // ~97 MB lz4 member -> ~190 MB FAT16 image).
 const MAX_WHOLE_BUFFER_BYTES = 1 << 30;
 
-// RFCARD_PATTERN / SIDECAR_PATTERNS (image_extractor.py:37-53): the candidate
-// filter discover_candidates applies; the analyzer's stricter
-// _matches_candidate runs again per MBN.
+// Candidate/sidecar filename filters; the analyzer's stricter matchesCandidate
+// runs again per MBN.
 export const RFCARD_RE = /^(?:rf_config_[0-9A-Fa-f]{3,6}_[0-9A-Fa-f]{1,4}_[0-9A-Fa-f]{1,4}(?:_(?:\d+))?|[0-9A-Fa-f]+_[0-9A-Fa-f]+(?:_[0-9A-Fa-f]+)?)\.mbn$/i;
 export const SIDECAR_RES = [/^rf_config_.*_combos\.xml$/, /^rf_config_.*_combos_.*\.txt$/, /^mbn_ota\.md5sum$/, /^rfcard_info_all\.(?:csv|json)$/];
 
@@ -171,7 +167,7 @@ export class VDir {
   }
 }
 
-// mkdtemp(prefix=f"{tag}_", dir=ctx.workdir): sibling workdirs under one root.
+// Sibling workdirs under one root, named `<tag>_<n>`.
 class ExtractContext {
   constructor({ wholeBufferLimit = MAX_WHOLE_BUFFER_BYTES } = {}) {
     this.root = new VDir("");
@@ -199,7 +195,7 @@ class ExtractContext {
   }
 }
 
-// --- unwrap recursion (:663-729) ------------------------------------------------------
+// --- unwrap recursion -----------------------------------------------------------------
 
 export async function unwrap(vfile, ctx, depth = 0) {
   if (depth > MAX_RECURSION_DEPTH) {
@@ -213,7 +209,7 @@ export async function unwrap(vfile, ctx, depth = 0) {
 
   if (tag === "empty" || tag === "unknown" || tag === "bootimg") {
     // For unrecognized top-level images, scan for known containers hidden
-    // behind OEM wrappers (:679-685).
+    // behind OEM wrappers.
     if (tag === "unknown" && depth === 0) await unwrapEmbeddedContainers(vfile, ctx, depth);
     return;
   }
@@ -242,7 +238,7 @@ async function maybeUnwrapChild(vfile, ctx, depth) {
   }
 }
 
-// _unwrap_embedded_containers (:712-729).
+// Scan an unrecognized top-level image for embedded sparse containers.
 async function unwrapEmbeddedContainers(vfile, ctx, depth) {
   for (const offset of await scanForSparse(vfile.asSource(), vfile.size)) {
     const workdir = ctx.newWorkdir("sliced");
@@ -279,7 +275,7 @@ function warnUnsupported(ctx, node, tag) {
   });
 }
 
-// --- extractors (:292-660) -------------------------------------------------------------
+// --- extractors -------------------------------------------------------------------------
 
 async function extractTagged(vfile, tag, ctx) {
   switch (tag) {
@@ -336,10 +332,10 @@ async function placeTree(dir, image, label, ctx) {
   }
 }
 
-// extract_sparse (:292-319), 7z branch semantics: the filesystem tree lands
-// directly in the sparse workdir (golden radio.img records are
-// `sparse/image/...`). Non-filesystem sparse payloads keep their raw image in
-// the workdir for recursive unwrap, like simg2img's <stem>.raw output.
+// Sparse extraction: the filesystem tree lands directly in the sparse workdir
+// (golden radio.img records are `sparse/image/...`). Non-filesystem sparse
+// payloads keep their raw image in the workdir for recursive unwrap, like
+// simg2img's <stem>.raw output.
 async function extractSparse(vfile, ctx) {
   let reader;
   try {
@@ -377,21 +373,21 @@ async function streamSource(source) {
   return out;
 }
 
-// extract_fat/fat_or_mbr (:646-647 as in-house FAT walk instead of 7z).
+// FAT extraction via the in-house FAT walk.
 async function extractFat(vfile, tag, ctx) {
   const dir = ctx.newWorkdir(tag);
   return placeTree(dir, new Fat16Image(vfile.asSource()), tag, ctx);
 }
 
-// extract_ext4 (:322-332 as in-house walk instead of debugfs).
+// ext4 extraction via the in-house walk.
 async function extractExt4(vfile, ctx) {
   const dir = ctx.newWorkdir("ext4");
   return placeTree(dir, new Ext4Image(vfile.asSource()), "ext4", ctx);
 }
 
-// extract_gzip (:366-374): output file named <stem or inner.bin> inside the
-// gzip workdir; the FILE is returned so unwrap recurses into it (the workdir
-// itself is not an output, exactly like Python).
+// Gzip extraction: output file named <stem or inner.bin> inside the gzip
+// workdir; the FILE is returned so unwrap recurses into it (the workdir
+// itself is not an output).
 async function extractGzip(vfile, ctx) {
   if (vfile.size > ctx.wholeBufferLimit) {
     ctx.warnWholeBuffer("gzip", vfile.name, vfile.size);
@@ -443,13 +439,13 @@ async function readStreamCapped(stream, cap) {
 }
 
 // Multi-member tolerant gzip via DecompressionStream ("gzip" handles
-// concatenated members like the gzip module does).
+// concatenated members).
 async function gunzipStream(data, cap = MAX_WHOLE_BUFFER_BYTES) {
   const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"));
   return readStreamCapped(stream, cap);
 }
 
-// extract_lz4 (:414-432) via the in-house frame decoder. Memory: the Samsung
+// LZ4 extraction via the in-house frame decoder. Memory: the Samsung
 // member is 101,488,514 bytes compressed and 199,233,005 bytes (~190MB) out.
 // Tar members are now region-backed (step 7), so the compressed bytes are read
 // on demand here and nothing is materialized before this call; the output is
@@ -479,11 +475,11 @@ async function extractLz4(vfile, ctx) {
   }
 }
 
-// extract_tar (:435-446): ustar reader with GNU longname and POSIX PAX
-// ('x'/'g') path-override support; extraction failure (bad paths, truncation)
-// returns null like the caught TarError.
+// Tar extraction: ustar reader with GNU longname and POSIX PAX ('x'/'g')
+// path-override support; extraction failure (bad paths, truncation) returns
+// null with a warning.
 // Samsung .tar.md5: everything after the 1024-byte end marker (the md5 tail)
-// is ignored, matching tarfile which stops at the end-of-archive marker.
+// is ignored — the reader stops at the end-of-archive marker.
 async function extractTar(vfile, ctx) {
   const out = ctx.newWorkdir("tar");
   try {
@@ -547,8 +543,8 @@ async function extractTar(vfile, ctx) {
   }
 }
 
-// tarfile's filter="data": absolute paths and ".." escape attempts raise,
-// failing the whole extraction; "./" segments are normalized away.
+// Member paths: absolute paths and ".." escape attempts raise, failing the
+// whole extraction; "./" segments are normalized away.
 function tarMemberPath(name) {
   if (name.startsWith("/")) throw new Error(`tar member path is absolute: ${name}`);
   const parts = [];
@@ -574,11 +570,9 @@ function readTarString(header, off, len) {
   return String.fromCharCode(...header.subarray(off, end)).trimEnd();
 }
 
-// tarfile.nti tolerance: NUL/space-padded octal - leading padding is stripped
-// before the digits (Python does nts() then int(s.strip() or "0", 8)), and
-// any non-octal remainder raises like tarfile's InvalidHeaderError (GNU
-// base-256 sizes, the documented gap, land there too instead of parsing as
-// garbage octal).
+// Size-field tolerance: NUL/space-padded octal — leading padding is stripped
+// before the digits, and any non-octal remainder raises (GNU base-256 sizes,
+// the documented gap, land there too instead of parsing as garbage octal).
 function readTarSize(header, off) {
   let i = 0;
   while (i < 12 && (header[off + i] === 0 || header[off + i] === 0x20)) i++;
@@ -594,8 +588,8 @@ function readTarSize(header, off) {
 
 // POSIX PAX record payload: "<len> key=value\n" repeated, len counting from
 // the first digit through the trailing newline. Malformed records stop the
-// scan (a raise here would fail the whole tar where tarfile raises
-// ReadError; the corpus carries only well-formed headers).
+// scan rather than failing the whole tar (the corpus carries only well-formed
+// headers).
 function parsePaxRecords(u8) {
   const records = new Map();
   let pos = 0;
@@ -620,8 +614,8 @@ function latinish(u8) {
   return String.fromCharCode(...u8.subarray(0, u8.length)).replace(/\0+$/, "");
 }
 
-// extract_zip (:603-634): central-directory read; when .bbfw members exist
-// only those are extracted (IPSW shape), otherwise the full archive.
+// Zip extraction: central-directory read; when .bbfw members exist only those
+// are extracted (IPSW shape), otherwise the full archive.
 async function extractZip(vfile, ctx) {
   const out = ctx.newWorkdir("zip");
   try {
@@ -630,8 +624,7 @@ async function extractZip(vfile, ctx) {
     const basebands = entries.filter((e) => e.name.toLowerCase().endsWith(".bbfw"));
     const selected = basebands.length ? basebands : entries;
     for (const entry of selected) {
-      // Python zipfile refuses encrypted members (RuntimeError, password
-      // required for extraction); never emit ciphertext as payload.
+      // Encrypted members are refused; never emit ciphertext as payload.
       if (entry.flags & 0x1) {
         ctx.warnings.push({ tool: "zip", message: `${entry.name}: encrypted zip member skipped, password required for extraction` });
         continue;
@@ -668,7 +661,7 @@ function zipMemberPath(name) {
 // EOCD + central directory (with zip64 fallbacks; per-entry inflate happens
 // in zipEntryData so only requested members are ever decompressed).
 // Exported for apple_ftab.js's bbfw member walk (same central-directory read
-// as extract_zip — one implementation, no divergence).
+// as extractZip — one implementation, no divergence).
 export async function zipEntries(source) {
   const maxComment = 22 + 65535;
   const tailSize = Math.min(maxComment, source.size);
@@ -777,7 +770,7 @@ function u64leAt(u8, off) {
   return hi * 0x100000000 + lo;
 }
 
-// extract_bbcfg (:523-600): iphone card recovery + the EFS pathname scan.
+// BBCFG: iphone card recovery + the EFS pathname scan.
 async function extractBbcfg(vfile, ctx) {
   if (vfile.size > ctx.wholeBufferLimit) {
     ctx.warnWholeBuffer("bbcfg", vfile.name, vfile.size);
@@ -802,9 +795,9 @@ async function extractBbcfg(vfile, ctx) {
 
 // --- public API -----------------------------------------------------------------------
 
-// scan_container (:777-805): recursively unwrap and return the virtual tree.
-// Hard failures (not a file-like source, below the size floor) throw like
-// ExtractionError; per-container problems accumulate in warnings.
+// Recursively unwrap and return the virtual tree. Hard failures (not a
+// file-like source, below the size floor) throw ExtractionError;
+// per-container problems accumulate in warnings.
 export async function extractContainer(source, name, options = {}) {
   if (typeof source.size !== "number") throw new ExtractionError(`Not a readable source: ${name}`);
   if (source.size < MIN_CONTAINER_SIZE) {
@@ -815,9 +808,8 @@ export async function extractContainer(source, name, options = {}) {
   return { root: ctx.root, outputs: ctx.outputs, warnings: ctx.warnings };
 }
 
-// discover_candidates (:752-770): over the registered output workdirs ONLY
-// (Python iterates ctx.outputs; intermediate file staging dirs like gzip_xxx/
-// are never discovered).
+// Discover candidates over the registered output workdirs ONLY; intermediate
+// file staging dirs like gzip_xxx/ are never discovered.
 export function discoverCandidates(outputs) {
   const mbns = [];
   const sidecars = [];
@@ -829,9 +821,8 @@ export function discoverCandidates(outputs) {
   return { mbns, sidecars };
 }
 
-// sidecars_in_directory (:773-775): {name: virtual path} for sidecars sharing
-// the MBN's directory (Python maps name -> absolute scratch path; the browser
-// has no paths, so the virtual tree path stands in).
+// {name: virtual path} for sidecars sharing the MBN's directory (the browser
+// has no filesystem paths, so the virtual tree path stands in).
 export function sidecarsInDirectory(mbnPath, sidecars) {
   const parent = mbnPath.slice(0, mbnPath.lastIndexOf("/"));
   const out = {};

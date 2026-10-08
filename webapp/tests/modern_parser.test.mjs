@@ -1,5 +1,4 @@
-// JS API shape (mirrors gui_version/new_rfcard_parser.py plus the modern
-// parse path of qualcomm_rf_combo_analyzer.py):
+// JS API shape:
 //   readVarint(u8, pos) -> { value, pos }
 //   protobufFields(data) -> Map<fieldNumber, [wire, value][]>
 //   protoBytes/protoUint/protoRepeatedUint(fields, number)
@@ -82,8 +81,8 @@ function namesOf(blob) {
   return extractRfcDats(blob).map((d) => d.name);
 }
 
-// Packs 12 bytes using the pinned NRBandGroup bit layout (see the layout test
-// below for the Python ctypes derivation).
+// Packs 12 bytes using the pinned NRBandGroup bit layout (see the layout
+// test below for the bit-by-bit derivation).
 function packBandGroup(v) {
   const out = new Uint8Array(12);
   const dv = new DataView(out.buffer);
@@ -138,10 +137,6 @@ test("NRBandGroup 12-byte layout is pinned (Python ctypes derivation)", () => {
   // 00000000): unit0 = tech@0-1, band@2-10, dl_bw_class@11-15,
   // dl_bw_per_cc@16-22, ul_bw_class@23-27; ul_bw_per_cc overflows unit0 and
   // starts unit1 at bit 32 (the 33rd bit).
-  //
-  // Plan bug note: the Task 7 example encoded band<<6, dl_bw_class<<16 and
-  // dl_bw_per_cc<<26, which does not match the real ctypes layout; these
-  // values are re-derived from Python instead.
   const g = decodeBandGroup(hexToBytes("095102000100000000000000"));
   assert.equal(g.tech, 1);
   assert.equal(g.band, 66);
@@ -440,7 +435,7 @@ test("modern DAT/protobuf records match Python goldens", { skip: !corpusAvailabl
 
 // --- F1: exact varint arithmetic past 2**53 (Python arbitrary-precision int) ---
 
-// Minimal protobuf varint encoder (mirrors the Python reference encoder).
+// Minimal protobuf varint encoder.
 function encVarint(n) {
   n = BigInt(n);
   const out = [];

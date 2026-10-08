@@ -19,7 +19,7 @@ import { comboKey } from "./mtk_universal.js";
 
 export const FAMILY_KEYS = { LTE: "lte_ca", "NR SA (1CC)": "nr_sa", "NR-CA": "nr_ca", "EN-DC": "endc", NRDC: "nrdc" };
 
-// main.py _class_name: letters for the observed range, [n] beyond.
+// Class letters for the observed range, "[n]" beyond it.
 const classLabel = (v) => (v >= 0 && v < 26 ? String.fromCharCode(65 + v) : `[${v}]`);
 
 // FR1/FR2 presentation boundary of guiFamilyCounts (nrdc split).

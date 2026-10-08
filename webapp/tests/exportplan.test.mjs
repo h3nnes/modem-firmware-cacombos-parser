@@ -1,7 +1,7 @@
 // Unit tests for the batch-export plan helpers (webapp/js/exportplan.js):
 // job list construction (ticked cards x enabled formats), the files-vs-zip
 // delivery decision, deterministic zip entry name dedupe, and the BOM
-// preserving UTF-8 decode used before every download (Python writes utf-8-sig).
+// preserving UTF-8 decode used before every download.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -14,9 +14,8 @@ import {
 } from "../js/exportplan.js";
 
 test("EXPORT_FORMATS lists the eight export formats in canonical order", () => {
-  // gui_version/main.py:84-90 order is mbn, json, csv, b0cd, b826; the webapp
-  // inserts its extra "webcsv" slot after csv and the MTK DRDI trace formats
-  // at the end.
+  // Canonical order is mbn, json, csv, b0cd, b826; the webapp inserts its
+  // extra "webcsv" slot after csv and the MTK DRDI trace formats at the end.
   assert.deepEqual(EXPORT_FORMATS, ["mbn", "json", "csv", "webcsv", "b0cd", "b826", "mtk_nr", "mtk_lte"]);
 });
 

@@ -1,9 +1,9 @@
-// Pure-JS LZ4 FRAME format decoder (image_extractor.extract_lz4 :414-430 used
-// the lz4 CLI / python lz4.frame; the browser gets this instead). Decodes one
-// complete frame into a Uint8Array. Checksum fields (header HC, per-block,
-// content xxhash32) are parsed and skipped, never verified: valid streams
-// decode byte-identically to the reference tools, while corrupt compressed
-// data still fails loudly during block decode.
+// Pure-JS LZ4 FRAME format decoder (the browser replacement for the lz4 CLI
+// / liblz4 used by external extraction). Decodes one complete frame into a
+// Uint8Array. Checksum fields (header HC, per-block, content xxhash32) are
+// parsed and skipped, never verified: valid streams decode byte-identically
+// to the reference tools, while corrupt compressed data still fails loudly
+// during block decode.
 
 const MINMATCH = 4;
 

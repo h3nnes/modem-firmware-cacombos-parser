@@ -1,14 +1,12 @@
-// Port of the modern (DAT/protobuf) RF-card parsing core:
-// gui_version/new_rfcard_parser.py plus the modern orchestration from
-// gui_version/qualcomm_rf_combo_analyzer.py (_modern_lte_rows,
-// _modern_nr_rows, parse_modern). Byte-identical behaviour contract with the
-// Python originals: values, dict key insertion order and iteration order.
+// Modern (DAT/protobuf) RF-card parsing core.
+// Behaviour contract: identical values, dict key insertion order and
+// iteration order.
 //
-// Python tuples return as JS arrays; Python None as null; dict keys keep the
-// exact Python snake_case spelling. zlib decompression uses the vendored
-// fflate (webapp/lib/vendor/fflate.js); error message strings inside
-// parse_res_dat's aggregated ValueError differ from Python's zlib.error text
-// (candidate selection and results are identical).
+// Result objects use snake_case keys and preserve key insertion order (the
+// golden comparator checks key order). zlib decompression uses the vendored
+// fflate (webapp/lib/vendor/fflate.js); the aggregated error message text of
+// parseResDat differs from the raw zlib error text (candidate selection and
+// results are identical).
 import { StructReader, hex as bytesHex, utf8 } from "./bytes.js";
 import { sha256Hex } from "./hash.js";
 import { Inflate } from "../../lib/vendor/fflate.js";
@@ -18,9 +16,9 @@ export { ToolError };
 
 const VERSION = "1.8.0";
 
-// Python ints are arbitrary precision; JS doubles round every integer past
-// 2**53. Varints that large stay exact as BigInt, everything at or below
-// Number.MAX_SAFE_INTEGER stays a plain Number.
+// Doubles round every integer past 2**53. Varints that large stay exact as
+// BigInt, everything at or below Number.MAX_SAFE_INTEGER stays a plain
+// Number.
 const MAX_SAFE_BIG = BigInt(Number.MAX_SAFE_INTEGER);
 
 function toExactNumber(value) {
@@ -28,9 +26,9 @@ function toExactNumber(value) {
 }
 
 // Counts and offsets only index or slice byte arrays. An exact value >= 2**53
-// exceeds every real buffer length in Python too, where the slice comes back
-// empty; converting it to Number (still >= 2**53 after rounding) produces the
-// same empty-slice outcome, so Number is parity-safe on these paths.
+// exceeds every real buffer length; converting it to Number (still >= 2**53
+// after rounding) produces an empty-slice outcome, so Number is safe on these
+// paths.
 function asCount(value) {
   return typeof value === "bigint" ? Number(value) : value;
 }
@@ -70,14 +68,14 @@ function adler32(u8) {
   return (b * 65536 + a) >>> 0;
 }
 
-// Python zlib.decompress parity on top of fflate: unzlibSync skips the
-// adler32 trailer and assumes it sits in the final four bytes, while Python
+// Strict zlib decode on top of fflate: unzlibSync skips the adler32 trailer
+// and assumes it sits in the final four bytes, while a correct decoder
 // verifies the trailer at the exact end of the deflate stream and ignores
 // any trailing bytes. The streaming Inflate tracks the consumed bit
 // position (after push() inf.p holds the unconsumed tail), so the trailer
 // can be located and verified exactly. Returns the raw bytes plus the number
 // of consumed input bytes (header + deflate + verified adler trailer) so
-// callers can reproduce decompressobj.unused_data accounting.
+// callers can account for trailing bytes after the zlib stream.
 export function inflateZlibChecked(data) {
   if (data.length < 2) throw new Error("incomplete or truncated stream");
   if ((data[0] & 15) !== 8 || (data[0] >> 4) > 7 || ((data[0] << 8) | data[1]) % 31 !== 0) {
@@ -113,12 +111,12 @@ function ciByte(u8, i, t) {
 }
 
 export function extractRfcDats(blob) {
-  // Port of the rb"/rfc/[^\x00\r\n]{1,240}\.dat\x00" IGNORECASE scan plus the
-  // Large-EFS TLV validation. Greedy {1,240} backtracking can only split at
-  // L = runLen - 4, so the regex is equivalent to: maximal run of
-  // non-NUL/CR/LF bytes with 5 <= runLen <= 244 ending in ".dat" and
-  // terminated by a NUL. Returns Python dict semantics: entries deduped by
-  // name, last data wins, first-appearance order.
+  // Case-insensitive scan for "/rfc/<name>.dat" NUL-terminated paths
+  // ([^\x00\r\n]{1,240}) plus the Large-EFS TLV validation. Greedy {1,240}
+  // backtracking can only split at L = runLen - 4, so the pattern is
+  // equivalent to: maximal run of non-NUL/CR/LF bytes with 5 <= runLen <= 244
+  // ending in ".dat" and terminated by a NUL. Entries dedupe by name, last
+  // data wins, first-appearance order.
   const byName = new Map();
   const indexOf = (from) => {
     for (let i = from; i < blob.length; i++) if (blob[i] === 0x2f) return i;
@@ -137,9 +135,9 @@ export function extractRfcDats(blob) {
     const name = utf8(blob, i, j);
     if (i >= 4) {
       const tlv = new StructReader(blob);
-      // Python validates len(path_with_nul): the path's BYTE length plus the
-      // NUL terminator (j - i bytes of path + 1). The decoded string's .length
-      // counts UTF-16 units and undercounts multi-byte paths.
+      // The path's BYTE length plus the NUL terminator is validated
+      // (j - i bytes of path + 1). The decoded string's .length counts UTF-16
+      // units and undercounts multi-byte paths.
       if (tlv.u16(i - 4) === 1 && tlv.u16(i - 2) === j - i + 1) {
         const dataHdr = j + 1;
         if (dataHdr + 6 <= blob.length) {
@@ -244,9 +242,8 @@ export function datPayloadCandidates(dat) {
 export function readVarint(u8, pos) {
   // Fast path: up to seven payload groups (shift < 49) keep every partial
   // sum below 2**49, so the double accumulator stays exact. Longer varints
-  // (Python allows shift < 70, i.e. ten bytes) switch to BigInt, which is
-  // exact for the remaining shifts. Values above 2**53 come back as BigInt,
-  // matching Python's arbitrary-precision int.
+  // (up to shift < 70, i.e. ten bytes) switch to BigInt, which is exact for
+  // the remaining shifts. Values above 2**53 come back as BigInt.
   let value = 0;
   let shift = 0;
   while (pos < u8.length && shift < 49) {
@@ -273,7 +270,7 @@ export function protobufFields(data) {
   while (pos < data.length) {
     let key;
     ({ value: key, pos } = readVarint(data, pos));
-    // Python derives number = key >> 3 and wire = key & 7 from the exact
+    // number = key >> 3 and wire = key & 7 must be derived from the exact
     // arbitrary-precision key. A rounded key would misread the wire type
     // (2**53+7 rounds to 2**53, wire 0, instead of raising for wire 7), so
     // the split happens on the exact integer and only the resulting field
@@ -293,7 +290,7 @@ export function protobufFields(data) {
     } else if (wire === 2) {
       let size;
       ({ value: size, pos } = readVarint(data, pos));
-      // Sizes >= 2**53 exceed any real buffer, exactly as in Python.
+      // Sizes >= 2**53 exceed any real buffer.
       const length = asCount(size);
       if (pos + length > data.length) throw new Error("Truncated protobuf length-delimited field");
       value = data.subarray(pos, pos + length);
@@ -346,7 +343,8 @@ export function protoRepeatedUint(fields, number) {
   return result;
 }
 
-// Field map of the RRC container message, in the Python dict insertion order.
+// Field map of the RRC container message; the key order is part of the
+// output contract.
 const RRC_FIELDS = [
   ["NR_band_group_table_high", "bytes", 1],
   ["NR_band_group_table_low", "bytes", 2],
@@ -462,9 +460,9 @@ export function decodeNrProperty(raw) {
   };
 }
 
-// ctypes NRBandGroup (LittleEndianStructure, _pack_=4, sizeof=12) bit layout,
-// derived from Python: unit0 = tech@0-1, band@2-10, dl_bw_class@11-15,
-// dl_bw_per_cc@16-22, ul_bw_class@23-27 (bits 28-31 unused); ul_bw_per_cc
+// NRBandGroup 12-byte little-endian bit layout: unit0 = tech@0-1, band@2-10,
+// dl_bw_class@11-15, dl_bw_per_cc@16-22, ul_bw_class@23-27 (bits 28-31
+// unused); ul_bw_per_cc
 // overflows unit0 and starts unit1 at bit 32; unit1 = ul_bw_per_cc@32-38,
 // dl_max_antennas_index@39-45, ul_max_antennas_index@46-52, max_scs@53-55,
 // ul_qam_cap_index@56-57, srs_tx_switch_type@58-61,
@@ -787,21 +785,21 @@ function modernNrRows(rrc, suffix, prefix, table, bwNames, antennaNames) {
   return [combos, components, records];
 }
 
-// Python str.strip() removes exactly the str.isspace() set: U+0009-000D,
-// U+001C-001F, U+0020, U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029,
-// U+202F, U+205F, U+3000. JS \s additionally strips U+FEFF (Python keeps it)
-// and misses U+0085 and U+001C-001F, hence the explicit class.
+// Strips exactly the Unicode whitespace set: U+0009-000D, U+001C-001F,
+// U+0020, U+0085, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
+// U+205F, U+3000. JS \s additionally strips U+FEFF and misses U+0085 and
+// U+001C-001F, hence the explicit class.
 const PY_STRIP_RE = /^[\t\n\x0b\x0c\r\x1c-\x1f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t\n\x0b\x0c\r\x1c-\x1f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu;
 
 function pyStrip(text) {
   return text.replace(PY_STRIP_RE, "");
 }
 
-// Python str.casefold() minus str.lower(): for every code point not listed
-// here casefold == lower, which String#toLowerCase replicates. Generated
-// from Python over the full code point range (casefold(chr(cp)) !=
-// chr(cp).lower()); includes the Greek final sigma, the long s, ligature
-// expansions, the Turkic dotted/dotless I, sharp s, and Cherokee.
+// Full casefold mapping: for every code point not listed here casefold ==
+// lower, which String#toLowerCase replicates. The table covers the full code
+// point range where casefold differs from lower(); it includes the Greek
+// final sigma, the long s, ligature expansions, the Turkic dotted/dotless I,
+// sharp s, and Cherokee.
 const PY_CASEFOLD_DIFF = new Map([
   [0xb5, "\u03bc"], [0xdf, "ss"], [0x149, "\u02bcn"], [0x17f, "s"], [0x1f0, "j\u030c"],
   [0x345, "\u03b9"], [0x390, "\u03b9\u0308\u0301"], [0x3b0, "\u03c5\u0308\u0301"],
@@ -890,8 +888,8 @@ const ASCII_TEXT_RE = /^[\x00-\x7f]*$/;
 const ASCII_DIGITS_RE = /^[0-9]+$/;
 
 export function pyCasefold(text) {
-  // ASCII fast path: Python str.casefold equals str.lower for ASCII, and JS
-  // toLowerCase is identical over ASCII (this is not the locale-sensitive
+  // ASCII fast path: casefold equals lower for ASCII, and JS toLowerCase is
+  // identical over ASCII (this is not the locale-sensitive
   // toLocaleLowerCase). Generated table text is overwhelmingly ASCII, so this
   // avoids the per-character Map lookup + concatenation.
   if (ASCII_TEXT_RE.test(text)) return text.toLowerCase();
@@ -903,21 +901,21 @@ export function pyCasefold(text) {
   return out;
 }
 
-// Python re.IGNORECASE simple-folds U+0130/U+0131 onto "i" and U+017F onto
-// "s" (probed: exactly these non-ASCII code points match [a-z]/[A-Z] under
-// re.I, with ligatures excluded). JS /iu natively folds U+017F and U+212A
-// but not the Turkic pair, so the match input is pre-normalized here instead
-// of relying on engine-specific folding.
+// Case-insensitive matching simple-folds U+0130/U+0131 onto "i" and U+017F
+// onto "s" (exactly these non-ASCII code points match [a-z]/[A-Z]; ligatures
+// are excluded). JS /iu natively folds U+017F and U+212A but not the Turkic
+// pair, so the match input is pre-normalized here instead of relying on
+// engine-specific folding.
 const PY_RE_FOLD_RE = /[\u0130\u0131\u017f\u212a]/gu;
 
 export function pyRegexFold(text) {
   return text.replace(PY_RE_FOLD_RE, (ch) => (ch === "\u017f" ? "s" : ch === "\u212a" ? "k" : "i"));
 }
 
-// Python \d matches Unicode Nd and int() evaluates each Nd code point's
-// digit value. Every Nd block is ten consecutive code points with digit
-// values 0..9, so the block starts below (generated from Python
-// unicodedata) are enough to evaluate arbitrary Nd runs exactly.
+// Digit matching covers Unicode Nd and evaluates each Nd code point's digit
+// value. Every Nd block is ten consecutive code points with digit values
+// 0..9, so the block starts below are enough to evaluate arbitrary Nd runs
+// exactly.
 const ND_RUN_STARTS = [
   48, 1632, 1776, 1984, 2406, 2534, 2662, 2790, 2918, 3046, 3174, 3302, 3430,
   3558, 3664, 3792, 3872, 4160, 4240, 6112, 6160, 6470, 6608, 6784, 6800,
@@ -951,8 +949,8 @@ const MBN_NAME_RE = /rf_config_(\p{Nd}+)_(\p{Nd}+)_(\p{Nd}+)\.mbn\n?$/iu;
 
 export function readRfcardInfo(datName, inputName, rrc) {
   // Recover the RFCard identifiers and embedded RRC environment names.
-  // Python semantics: re.search with re.IGNORECASE over Unicode strings
-  // (\d == Nd, int() reads Nd digits) and str.strip() on the env names.
+  // Case-insensitive Unicode search (\d == Nd, Nd digits read as integers)
+  // and Unicode-whitespace strip on the env names.
   const datMatch = DAT_NAME_RE.exec(pyRegexFold(datName));
   const mbnMatch = MBN_NAME_RE.exec(pyRegexFold(inputName));
   let hwid = datMatch ? pyNdInt(datMatch[1]) : null;
@@ -1013,8 +1011,8 @@ const SECTION_SPECS = [
 
 export function parseModernModule(record, blob) {
   const dats = extractRfcDats(blob);
-  // Python: name.casefold().endswith("_res.dat") (full case folding, e.g.
-  // "x_reſ.dat" matches); toLowerCase leaves U+017F untouched.
+  // Full case-folded endswith("_res.dat") check (e.g. "x_reſ.dat" matches);
+  // toLowerCase leaves U+017F untouched.
   const resItems = dats
     .filter((d) => pyCasefold(d.name).endsWith("_res.dat"))
     .map((d) => [d.name, d.data]);
@@ -1092,8 +1090,8 @@ export function countModernCombos(record, blob) {
     throw new ToolError("More than one *_res.dat was found: " + resItems.map(([name]) => name).join(", "));
   }
   const { rrc } = parseResDat(resItems[0][1]);
-  // Throw parity with parseModernModule (:1001): identical arguments, identical
-  // error propagation at the same point of the pipeline. The result (rfcard
+  // Throw parity with parseModernModule: identical arguments, identical error
+  // propagation at the same point of the pipeline. The result (rfcard
   // metadata) is discarded — the count path skips metadata, not this call.
   readRfcardInfo(resItems[0][0], record.name, rrc);
   const counts = {};

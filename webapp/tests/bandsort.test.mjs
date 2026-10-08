@@ -1,6 +1,6 @@
 // Differential test: viewer.js band/column sort keys vs the Tk viewer's real
-// _band_sort_key/_column_sort_key (viewer.py:69-99). The in-repo probe script
-// bandsort_ref.py execs the viewer code verbatim and prints sort keys plus
+// _band_sort_key/_column_sort_key. The in-repo probe script bandsort_ref.py
+// execs the viewer code verbatim and prints sort keys plus
 // fully sorted (forward + reversed, stability-sensitive) orders; this test
 // spawns it and pins the JS port to the exact same output.
 import { test } from "node:test";

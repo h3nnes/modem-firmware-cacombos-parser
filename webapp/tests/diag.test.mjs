@@ -1,18 +1,14 @@
 // 0xB0CD (v41) / 0xB826 (v22) DIAG exports: legacy diag builders + exportModule
 // text output, with a Python differential on real corpus records.
 //
-// Python ground truth (gui_version/qualcomm_rf_combo_analyzer.py):
-//   _legacy_b0cd_packets (:682-718) / _legacy_b826_packets (:721-764) build
-//   parsed["diag"] inside parse_legacy (:1172-1175); export_module formats
-//   "b0cd"/"b826" (:1680-1687) through _write_diag (:1528-1541). The modern
-//   encoders (b0cd_v41_packets/b826_v22_packets) already live in
-//   modern_parser.js and are pinned by modern_parser.test.mjs.
+// The modern encoders (b0cd_v41_packets/b826_v22_packets) already live in
+// modern_parser.js and are pinned by modern_parser.test.mjs.
 //
 // JS API shape added here:
 //   legacyB0cdPackets(tableResults, packetCombos=100) -> [[label, Uint8Array]]
 //   legacyB826Packets(tableResults) -> [[label, Uint8Array]]
-//     tableResults: [[table, result]] pairs exactly like Python's `parsed`
-//     (result.combinations[].entries carry band/dl_bw_class_code/ul_present/
+//     tableResults: [[table, result]] pairs (result.combinations[].entries
+//     carry band/dl_bw_class_code/ul_present/
 //     ul_bw_class_code/dl_bw_code/ul_bw_code/dl_antenna_index/ul_antenna_index/
 //     rat; combos carry ul_tx_switch_type_raw).
 //   parseLegacyModule(record, blob) -> { ..., diag: { b0cd, b826 } }

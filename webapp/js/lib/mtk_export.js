@@ -1,28 +1,27 @@
-// Stage-D wire-format exports for MTK DRDI cards: a byte-exact port of the
-// python reference's mtk_export.py (B826 v21 + B0CD v41) — the formats the
-// uecaps parser's QNR/QLTE importers consume. cap_prune and the per-family
-// file writers are deliberately NOT ported (out of feature scope; the worker
+// Stage-D wire-format exports for MTK DRDI cards (B826 v21 + B0CD v41) — the
+// formats the uecaps parser's QNR/QLTE importers consume. Out of feature
+// scope: cap_prune and the per-family file writers (the worker
 // only needs the combined B826 text and the B0CD v41 file text).
 //
 // Byte-exactness contract (spec §5, differential-tested against
-// webapp/goldens/mtk/diag.json): every produced text must equal the python
-// CLI's output for the same card byte-for-byte. The two-layer dedup matters:
-// buildB826 first drops structurally identical component rows (python's
-// `repr(comps)` key — replaced here by a stable JSON key over dicts built in
-// the same field order), then buildB826Log drops combos that ENCODE to
-// identical bytes (mimo_index canonicalizes e.g. [2,4] and [4,2] to the same
-// antenna enum, so both layers can fire on the same input).
+// webapp/goldens/mtk/diag.json): every produced text must equal the golden
+// reference output for the same card byte-for-byte. The two-layer dedup
+// matters: buildB826 first drops structurally identical component rows
+// (`repr(comps)`-style identity — realized here as a stable JSON key over
+// dicts built in the same field order), then buildB826Log drops combos that
+// ENCODE to identical bytes (mimo_index canonicalizes e.g. [2,4] and [4,2] to
+// the same antenna enum, so both layers can fire on the same input).
 //
-// Port-risk notes (spec §6): LE byte packing is done with plain arithmetic
+// Fidelity notes (spec §6): LE byte packing is done with plain arithmetic
 // (struct "<HBBBBB"/"<HHHHHB" layouts), index tables are insertion-ordered
-// Maps keyed by the same "_"-joined digit tuples python uses, and python
-// exceptions become typed errors with identical message strings.
+// Maps keyed by "_"-joined digit tuples, and error cases become typed errors
+// with identical message strings.
 import { bump } from "./debug.js";
 import { sha256Hex } from "./hash.js";
 import { classify } from "./mtk_universal.js";
 
 // Physical carriers per LTE bandwidth class, indexed by the 0-based class
-// byte. A=1 B=2 C=2 D=3 E=4 F=5 (mtk_export.py LTE_CLASS_CCS).
+// byte. A=1 B=2 C=2 D=3 E=4 F=5.
 export const LTE_CLASS_CCS = [1, 2, 2, 3, 4, 5];
 export const LTE_UL_ABSENT = 6;
 
@@ -34,7 +33,7 @@ const SOURCE_TAGS = { 3: "RF_ENDC", 4: "RF_NRCA", 5: "RF_NRDC" };
 
 // ---------------------------------------------------------------- B826 tables
 
-// mtk_export.py BW_NAMES: index 0 is the "DEFAULT" placeholder and is NOT a
+// BW_NAMES: index 0 is the "DEFAULT" placeholder and is NOT a
 // key of BW_TO_INDEX — 67 encodable names, indices 1..67.
 export const BW_NAMES = [
   "DEFAULT", "5", "10", "15", "20", "20_20", "20_20_20",
@@ -61,11 +60,11 @@ export const SCS_TO_INDEX = new Map([
   [15, 1], [30, 2], [60, 3], [120, 4], [240, 5],
 ]);
 
-// mtk_export.py antenna_tables(): INVALID, the plain 1/2/4 enums, then for
+// Antenna tables: INVALID, the plain 1/2/4 enums, then for
 // every carrier count 2..8 the all-ones vector followed by the descending
 // 2-leading and 4-leading mixes, closed by the explicit 8/6-carrier tails.
-// 90 entries; both directions are kept like python's ANT_TO_INDEX /
-// INDEX_TO_ANT (the reverse map is what the reference decoder reads).
+// 90 entries; both directions are kept (the reverse map is what the
+// reference decoder reads).
 function antennaTables() {
   const names = ["INVALID", "1", "2", "4"];
   for (let count = 2; count <= 8; count++) {
@@ -102,10 +101,11 @@ export function mimoIndex(layers) {
   throw new Error(`B826 antenna enum cannot encode MIMO vector [${key.join(", ")}]`);
 }
 
-// python bw_ext_index is dead code (BW_EXT_ENABLE = False) and is not ported.
+// The bandwidth-EXT enum path is dead code upstream (BW_EXT_ENABLE = False)
+// and is not implemented here.
 // Returns [index, ok, rawKey, collapsed] — `collapsed` carries the ORIGINAL
 // bandwidth list only for the two-distinct-values collapse (the caller feeds
-// it to the unsupported counter); python returns None/() elsewhere.
+// it to the unsupported counter); it is null in every other branch.
 export function bwIndex(values) {
   if (!values || values.length === 0) return [0, true, [], null];
   const key = values.map(Number);
@@ -126,8 +126,8 @@ export function bwIndex(values) {
 
 // -------------------------------------------------------------- B826 encoding
 
-// mtk_export.py encode_component: one 9-byte component record. All inputs are
-// the ALREADY-SHIFTED dict values _b826_components produced (classes are the
+// One 9-byte component record. All inputs are
+// the ALREADY-SHIFTED dict values b826ComponentRows produced (classes are the
 // wire enums, i.e. raw + 1, UL absent = 0).
 export function encodeComponent(component, unsupported) {
   const band = Number(component.band);
@@ -180,12 +180,12 @@ export function encodeComponent(component, unsupported) {
   return out;
 }
 
-// python collections.Counter semantics: missing keys start at 0.
+// Counter semantics: missing keys start at 0.
 function bumpUnsupported(counter, key) {
   counter.set(key, (counter.get(key) ?? 0) + 1);
 }
 
-// mtk_export.py encode_combo: 3 zero bytes, "<H" features ((count & 0xF) << 3),
+// One combo record: 3 zero bytes, "<H" features ((count & 0xF) << 3),
 // 24 reserved zero bytes, then the 9-byte components.
 export function encodeCombo(components, unsupported) {
   const count = components.length;
@@ -204,7 +204,7 @@ export function encodeCombo(components, unsupported) {
   return out;
 }
 
-// mtk_export.py build_log: dedup whole combo payloads (byte equality,
+// Log build: dedup whole combo payloads (byte equality,
 // keep-first), then "<HHHHHB" header (VERSION, 0, total, 0, total, source).
 function buildB826Log(componentRows, source) {
   const unsupported = new Map();
@@ -242,17 +242,17 @@ const bytesHex = (bytes) => {
   return s;
 };
 
-// python str() of an int tuple for the unsupported-counter keys: "(7,)" for a
+// Int-tuple string form for the unsupported-counter keys: "(7,)" for a
 // single element, "(100, 50)" otherwise (cosmetic — keys never reach a file).
 const pyTuple = (values) =>
   values.length === 1 ? `(${values[0]},)` : `(${values.join(", ")})`;
 
-// mtk_export.py _b826_components: project one decoded combo onto the wire
+// Project one decoded combo onto the wire
 // dicts. Classes shift +1 into the wire enum (UL absent = 0); LTE MIMO falls
 // back to [2] per carrier when the row carries none; NR drops the whole combo
 // when a component has no resolved CCs, and only CCs with a resolved UL keep
 // their UL MIMO/BW entries. Dict FIELD ORDER is load-bearing: the stable dedup
-// key below serializes these objects, so it must match python's literal order.
+// key below serializes these objects, so the field order above is normative.
 export function b826ComponentRows(combos) {
   const rows = [];
   const seen = new Set();
@@ -287,8 +287,9 @@ export function b826ComponentRows(combos) {
       });
     }
     if (!comps.length) continue;
-    // python: key = repr(comps). The same field order is baked into the dicts
-    // above, so this stable JSON key collapses exactly the rows repr() would.
+    // The same field order is baked into the dicts
+    // above, so this stable JSON key collapses exactly the structurally
+    // identical rows.
     const key = JSON.stringify(comps);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -297,7 +298,7 @@ export function b826ComponentRows(combos) {
   return rows;
 }
 
-// mtk_export.py build_b826: pure encode of one family (no file I/O).
+// Pure encode of one family (no file I/O).
 export function buildB826(combos, source, tag = null) {
   bump("buildB826");
   tag = tag || SOURCE_TAGS[source] || `SOURCE${source}`;
@@ -312,7 +313,7 @@ export function buildB826(combos, source, tag = null) {
     unsupported: Object.fromEntries(unsupported),
     hex: bytesHex(blob).toUpperCase(),
     sha256: sha256Hex(blob),
-    // python B826Result.block(): the "# header / Payload:" text block.
+    // The "# header / Payload:" text block.
     block(device) {
       return (
         `# 0xB826 v21 ${this.tag} (source=${this.source}) ${device}\n` +
@@ -323,10 +324,10 @@ export function buildB826(combos, source, tag = null) {
   };
 }
 
-// mtk_export.py combined_b826_text: EN-DC first, then NRCA, then the v21
-// RF_NRDC block ONLY when validated mixed FR1/FR2 rows exist (mtk_universal.py
-// export_selected_formats). Each block already ends in a newline, so
-// "\n".join leaves one blank line between blocks.
+// Combined text: EN-DC first, then NRCA, then the v21
+// RF_NRDC block ONLY when validated mixed FR1/FR2 rows exist. Each block
+// already ends in a newline, so joining with "\n" leaves one blank line
+// between blocks.
 export function buildB826CombinedText(combos, device) {
   const [endc, nrAll] = classify(combos, 1);
   const nrdc = nrAll.filter(
@@ -341,7 +342,7 @@ export function buildB826CombinedText(combos, device) {
 
 // ------------------------------------------------------------------ B0CD v41
 
-// mtk_export.py B0cdError: a normalized LTE row cannot be represented.
+// Raised when a normalized LTE row cannot be represented.
 export class B0cdError extends Error {
   constructor(message) {
     super(message);
@@ -349,7 +350,7 @@ export class B0cdError extends Error {
   }
 }
 
-// mtk_export.py _b0cd_antenna_index.
+// Antenna index for the descending-sorted MIMO layers (ANT_TO_INDEX lookup).
 function b0cdAntennaIndex(layers) {
   const values = [...layers].map(Number).sort((a, b) => b - a);
   const idx = ANT_TO_INDEX.get(values.join("_"));
@@ -359,7 +360,7 @@ function b0cdAntennaIndex(layers) {
   return idx;
 }
 
-// mtk_export.py _b0cd_component: one 7-byte "<HBBBBB" record.
+// One 7-byte "<HBBBBB" record.
 function b0cdComponent(component) {
   const band = Number(component.band);
   const dlClass = Number(component.dl_class);
@@ -381,8 +382,8 @@ function b0cdComponent(component) {
     ulMimo = 0;
   } else {
     if (!(ulClass < LTE_CLASS_CCS.length)) {
-      // python crashes with IndexError (LTE_CLASS_CCS[ul_class]); unreachable
-      // from decoded rows, which pin UL classes to 0..5 or the absent code 6.
+      // Unreachable from decoded rows, which pin UL classes to 0..5 or the
+      // absent code 6; kept as a defensive check.
       throw new B0cdError(`0xB0CD v41 UL class is out of range: ${ulClass}`);
     }
     qcomUlClass = ulClass + 1;
@@ -399,7 +400,7 @@ function b0cdComponent(component) {
   return out;
 }
 
-// mtk_export.py build_b0cd_v41: headerless v41 payloads from LTE-only
+// Headerless v41 payloads from LTE-only
 // normalized combinations (NR-bearing rows are skipped). Records dedup
 // keep-first on the encoded bytes; packets carry at most 100 records.
 export function buildB0cdV41(lteCombos, packetCombos = 100) {
@@ -458,8 +459,8 @@ const concatBytes = (list) => {
   return out;
 };
 
-// mtk_export.py write_b0cd_v41 minus the file write: the importer-friendly
-// payload text (BCS omitted, UL MIMO one layer per UL CC, UL-QAM unknown=0).
+// The v41 payloads as importer-friendly text, no file write
+// (BCS omitted, UL MIMO one layer per UL CC, UL-QAM unknown=0).
 export function buildB0cdText(lteCombos, device) {
   const result = buildB0cdV41(lteCombos);
   const lines = [

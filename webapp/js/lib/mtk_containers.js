@@ -1,21 +1,20 @@
-// Read-only, bounded modem-container unwrapping — port of
-// mtk-drdi-combo-parser/mtk_containers.py. Recognizes MTK partition headers,
-// HBLR, extent-based ext4, Android sparse, and single-stream gzip. No mounts,
-// external programs, temporary files, or filename-specific dispatch.
+// Read-only, bounded modem-container unwrapping. Recognizes MTK partition
+// headers, HBLR, extent-based ext4, Android sparse, and single-stream gzip.
+// No mounts, external programs, temporary files, or filename-specific dispatch.
 //
-// Deviations from the python (all documented here, one per line):
-// - xz is NOT ported: encountering an xz layer throws
+// Implementation notes (all documented here, one per line):
+// - xz is recognized but not expanded: encountering an xz layer throws
 //   Error("xz layer not supported in webapp") at the sniff site below.
 // - gzip decompression goes through DecompressionStream("gzip") by default,
 //   injectable via hooks.inflateGzip(bytes, maximum) ->
 //   Promise<{out, eof, unusedData}> for Node-zlib-based tests. The default
-//   implementation restores python's strict decompressobj(31) semantics
+//   implementation provides strict decompressobj(31)-style semantics
 //   (eof / unused_data) because DecompressionStream silently concatenates
 //   multi-member gzip streams and loses the member boundary.
-// - unwrap_path()/directory() (filesystem traversal) are not ported; the
-//   webapp only unwraps in-memory images via unwrapBytes().
-// - ext4 names decode via non-fatal TextDecoder (replacement chars) instead
-//   of python's surrogateescape; names here are ASCII in practice.
+// - The webapp only unwraps in-memory images via unwrapBytes(); directory()
+//   handles grouped {name, data} inputs instead of filesystem traversal.
+// - ext4 names decode via non-fatal TextDecoder (replacement chars);
+//   names here are ASCII in practice.
 import { sha256HexAsync } from "./hash.js";
 import { indexOfBytes, utf8 } from "./bytes.js";
 import { crc32 } from "./mtk_hash.js";
@@ -59,7 +58,7 @@ export class ModemParts {
 }
 
 function chk(data, off, size) {
-  // python struct.unpack_from bounds error, message-for-message.
+  // struct.unpack_from bounds error, message-for-message.
   if (off + size > data.length) {
     throw new Error(`unpack_from requires a buffer of at least ${off + size} bytes for unpacking ${size} bytes at offset ${off} (actual buffer size is ${data.length})`);
   }
@@ -111,7 +110,7 @@ function asciiDecode(bytes) {
   for (let i = 0; i < bytes.length; i++) {
     if (bytes[i] === 0) { end = i; break; }
     if (bytes[i] > 0x7f) {
-      // python bytes.decode("ascii") strict error text.
+      // bytes.decode("ascii") strict error text.
       throw new Error(`'ascii' codec can't decode byte 0x${bytes[i].toString(16)} in position ${i}: ordinal not in range(128)`);
     }
   }
@@ -121,8 +120,9 @@ function asciiDecode(bytes) {
 }
 
 // ---------------------------------------------------------------------------
-// Default gzip hook: DecompressionStream("gzip") with python decompressobj(31)
-// semantics. Python raises "truncated or oversized" when the member never ends
+// Default gzip hook: DecompressionStream("gzip") with decompressobj(31)
+// semantics. The reference parser raises "truncated or oversized" when the
+// member never ends
 // (eof false) and "trailing data/multiple streams" when bytes follow the first
 // member (unused_data). DecompressionStream cannot express either: it errors
 // on trailing garbage and *silently concatenates* a following valid member, so
@@ -235,8 +235,8 @@ async function gzipMemberEndBySearch(data, cap) {
 }
 
 export async function inflateGzipDefault(data, maximum) {
-  // Output is capped at maximum+1 bytes exactly like python's
-  // decompress(data, maximum + 1); the caller's charge() then rejects it.
+  // Output is capped at maximum+1 bytes, like decompress(data, maximum + 1);
+  // the caller's charge() then rejects it.
   const cap = maximum + 1;
   const r = await dsInflate(data, cap);
   if (r.capped) return { out: r.out, eof: false, unusedData: false };
@@ -650,9 +650,9 @@ class Unwrapper {
     }
   }
 
-  // Directory equivalent (python unwrap_path per-directory collect): a list of
-  // {name, data} files sharing one folder namespace, sorted by name like
-  // sorted(path.iterdir()). Files are charged here (the walk() caller charges
+  // Directory equivalent: a list of
+  // {name, data} files sharing one folder namespace, sorted by name.
+  // Files are charged here (the walk() caller charges
   // its own single input; there is no single input here).
   async directory(label, files, depth = 0) {
     this.depth(depth);

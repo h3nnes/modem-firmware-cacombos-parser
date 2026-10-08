@@ -74,10 +74,10 @@ const els = {
 
 // --- state ---------------------------------------------------------------------
 
-const GENERATION_DISPLAY = { "DAT/protobuf": "XML DAT" }; // gui_version/main.py:480
+const GENERATION_DISPLAY = { "DAT/protobuf": "XML DAT" };
 
 const cards = []; // { record, sourceId, fileIndex, key }; sourceId identifies the File in the worker
-const cardKeys = new Set(); // name\0sha256 dedupe across imports (main.py:249-254)
+const cardKeys = new Set(); // name\0sha256 dedupe across imports
 const cardsByKey = new Map(); // card key -> card (row clicks / dedupe)
 const checked = new Set(); // card keys (compare selection)
 const loadedFiles = []; // distinct source-file names, first appearance first (chips)
@@ -190,7 +190,7 @@ function renderLoadedFiles() {
   }
 }
 
-// Port of apple-c-modem-parser main.py human_size: one decimal for KB/MB/GB,
+// Human-readable size: one decimal for KB/MB/GB,
 // integer bytes for B, em dash for missing.
 function humanSize(size) {
   if (size == null) return "—";
@@ -400,7 +400,7 @@ function renderViewer(card, tables) {
   destroyViewer();
   const record = card.record;
   const identity = recordIdentity(record.name);
-  // Exports live in the export bar above the workbench now (Python GUI model);
+  // Exports live in the export bar above the workbench;
   // the per-card header buttons were superseded by "Export ticked".
   const head = document.createElement("div");
   head.className = "card-detail";
@@ -499,7 +499,7 @@ function renderCompare(entries) {
   els.viewerHost.replaceChildren(wrap);
 }
 
-// --- batch export (Python GUI model: ticked cards x enabled formats) ---------------
+// --- batch export (ticked cards x enabled formats) ------------------------------
 
 function enabledFormats() {
   return [...els.exportbar.querySelectorAll("input[type=checkbox][data-format]")]
@@ -528,7 +528,7 @@ function mimeFor(filename) {
 }
 
 // Delivery per design: <=ZIP_FILE_THRESHOLD files download individually
-// (BOM-preserving decode so CSVs stay byte-identical to Python's utf-8-sig);
+// (BOM-preserving decode so CSVs stay byte-identical to the worker's utf-8-sig output);
 // above it everything ships as ONE fflate zip with deduped entry names.
 function deliver(collected, cardCount, failedCount) {
   const suffix = failedCount ? ` ${failedCount} export(s) failed — see warnings.` : "";
@@ -757,7 +757,7 @@ worker.onmessage = (event) => {
       if (scanEpoch !== sessionEpoch) break; // late reply from a cleared scan
       for (const record of msg.records) {
         const key = cardKeyOf(record);
-        if (cardKeys.has(key)) continue; // main.py:348-363 dedupe
+        if (cardKeys.has(key)) continue; // dedupe
         cardKeys.add(key);
         // The sourceId registered at scan time identifies the File inside the
         // worker; every parseCard/export sends it, so the worker resolves bytes

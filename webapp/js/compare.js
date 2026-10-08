@@ -1,9 +1,8 @@
-// Card-vs-card comparison: the slice of compare_ca.py that applies without a
-// UE-capability CSV — band-token extraction from the web-table cells (via
-// bandcolors bandSegments canonicals), sorted-tuple combo sets
-// (compare_ca.py:104-107) and CA-only intersection/jaccard/recall/precision
-// (:169-176, first card is the reference) — plus the LTE/NR band presence diff
-// table the workbench comparison view renders.
+// Card-vs-card comparison for cards imported without a UE-capability CSV —
+// band-token extraction from the web-table cells (via bandcolors bandSegments
+// canonicals), sorted-tuple combo sets and CA-only
+// intersection/jaccard/recall/precision (first card is the reference) — plus
+// the LTE/NR band presence diff table the workbench comparison view renders.
 import { bandSegments } from "./lib/bandcolors.js";
 
 // Canonical bands ("B42", "n78") present in a band-column cell.
@@ -13,8 +12,7 @@ export function bandCanonicals(cell, header) {
     .map((seg) => seg.canonical);
 }
 
-// Set of sorted-tuple combos, serialized "+"-joined (compare_ca.py:107
-// combos.add(tuple(sorted(bands))).
+// Set of sorted-tuple combos, serialized "+"-joined.
 export function comboSetFromRows(rows, bandHeader) {
   const combos = new Set();
   for (const row of rows) {
@@ -24,8 +22,7 @@ export function comboSetFromRows(rows, bandHeader) {
   return combos;
 }
 
-// compare_ca.py:169-176 against a reference set. Only CA combos (2+ bands)
-// participate, exactly like ue_ca_only/card_ca_only there.
+// Pair stats against a reference set. Only CA combos (2+ bands) participate.
 export function pairStats(setA, setB) {
   const caOnly = (s) => new Set([...s].filter((c) => c.split("+").length > 1));
   const a = caOnly(setA);
@@ -41,7 +38,7 @@ export function pairStats(setA, setB) {
 }
 
 // Numeric-friendly band order: B bands before n bands, then band number, then
-// the bw-class letter (UI presentation choice; compare_ca sorts raw strings).
+// the bw-class letter (UI presentation choice).
 function canonicalSortKey(canonical) {
   const m = /^([Bn])(\d+)([A-Z])?$/.exec(canonical);
   if (!m) return [2, 0, canonical];

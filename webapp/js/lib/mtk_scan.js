@@ -1,8 +1,7 @@
-// Stage-B scan orchestration: the webapp counterpart of mtk-drdi-combo-parser
-// main.py's MtkBackend.summarize + profile_records, producing the per-(bank,
+// Stage-B scan orchestration: producing the per-(bank,
 // profile) card records from the design spec §2. One packaged image decodes
-// once here (counts are real combos, decoded at scan time like the python
-// GUI rows); Stage C re-decodes a single profile at card open from the
+// once here (counts are real combos, decoded at scan time); Stage C
+// re-decodes a single profile at card open from the
 // memoized parts.
 //
 // Return contract (spec §2): { records, warnings } or null (fall through to
@@ -65,7 +64,7 @@ function mtkHeadPlausible(head, name) {
   return k === "android-sparse" || k === "hblr" || k === "ext4";
 }
 
-// Python json.dumps default separators (", " / ": ") — the loader-attempts
+// Separator contract (", " / ": ") — the loader-attempts
 // diagnostic must read byte-identically to the reference error message.
 const pyJson = (v) => {
   if (v === null) return "null";
@@ -75,12 +74,12 @@ const pyJson = (v) => {
   return `{${Object.entries(v).map(([k, val]) => `${JSON.stringify(k)}: ${pyJson(val)}`).join(", ")}}`;
 };
 
-// mtk_universal.select_loader for the ported loader families, in the reference
+// Loader selection for the loader families, in the reference
 // family order: the Tensor split-CDF parts decide first (an NR15 image never
 // ships them), then the NR15 activation evidence, then the modern grid, then
 // the flat/MD800 pointer-run family. Every attempt is recorded in the same
-// {"loader", "accepted", "evidence"(, "reason")} shape the python ref emits
-// through its select_loader, and a total rejection carries them all.
+// {"loader", "accepted", "evidence"(, "reason")} shape the reference emits,
+// and a total rejection carries them all.
 // Exported for the loader-order/activation tests.
 export async function selectLoader(parts, rep = new Reporter()) {
   const attempts = [];
@@ -148,7 +147,7 @@ export async function selectLoader(parts, rep = new Reporter()) {
 // tables — profile roots are ROM-resident and the decode is the loader's own
 // two-byte MIMO grammar plus the firmware bandwidth-pair/SCS projection. The
 // flow mirrors decodeMtkSummary's shape (same envelope keys, fail-soft absent:
-// any loader proof failure is a hard UniversalError like python's extract).
+// any loader proof failure is a hard UniversalError).
 async function decodeNr15Summary(loader, attempts, rep) {
   const cap = loader.capabilityBank();
   const perProfile = new Map();
@@ -226,12 +225,11 @@ async function decodeNr15Summary(loader, attempts, rep) {
   };
 }
 
-// Full scan-time decode of one unwrapped image. Returns the python summary
+// Full scan-time decode of one unwrapped image. Returns the summary
 // shape (profiles/envelope/counts, differential-tested against report.json)
 // plus the live loader/state objects scanMtk needs to build records. Per-
-// profile grammar failures are fail-soft here: python's extract_capability
-// aborts the whole extraction, the webapp scan skips the profile with a
-// `tool: "mtk"` warning.
+// profile grammar failures are fail-soft here: the scan skips the profile
+// with a `tool: "mtk"` warning.
 export async function decodeMtkSummary(parts, rep = new Reporter()) {
   const [loader, attempts] = await selectLoader(parts, rep);
   if (loader instanceof Nr15Loader) {
@@ -337,7 +335,7 @@ export async function decodeMtkSummary(parts, rep = new Reporter()) {
   // (DL_MIMO/UL_MIMO/SCS/BW table) that counts-only differentials cannot see:
   // a corrupted constant would otherwise commit green with wrong row values.
   const comboDigest = {};
-  const encoder = new TextEncoder(); // UTF-8 — matches the python ref's str.encode()
+  const encoder = new TextEncoder(); // UTF-8 — matches the reference's str.encode()
   for (const [profile, combos] of perProfile) {
     comboDigest[String(profile)] = await sha256HexAsync(encoder.encode(combos.map(comboDigestLine).join("\n")));
   }
@@ -389,8 +387,8 @@ export async function decodeMtkSummary(parts, rep = new Reporter()) {
   };
 }
 
-// Canonical payload projection of one decoded combo (python ref: mtk_ref_report.py
-// combo_line — keep byte-identical). Kind/CCs + LTE (band, dl/ul class, per-CC
+// Canonical payload projection of one decoded combo (keep byte-identical —
+// pinned by the combo digest differential). Kind/CCs + LTE (band, dl/ul class, per-CC
 // DL MIMO) + NR (band, dl/ul class, per-CC [scs, dl_mimo, dl_bw, ul_mimo, ul_bw]).
 function comboDigestLine(combo) {
   return JSON.stringify({
@@ -530,7 +528,7 @@ export async function scanMtkParts(parts, name, cancelled = () => false, hooks =
   const records = [];
   const warnings = [...summary._warnings];
 
-  // Capability-bank profiles (python GUI rows): full decode with real counts.
+  // Capability-bank profiles: full decode with real counts.
   const units = summary._states.length + summary._secondary.length;
   onScanProgress({ stage: "mtk", done: 0, total: units });
   let done = 0;
@@ -549,7 +547,7 @@ export async function scanMtkParts(parts, name, cancelled = () => false, hooks =
     const im = s.image;
     const counts = guiFamilyCounts(combos);
     // Tensor rows represent one physical bank: LTE from a sibling bank keeps
-    // the per-bank count, not the merged projection (python profile_records).
+    // the per-bank count, not the merged projection.
     const lteCount = physical
       ? (physical[String(cap.table_index)]?.[String(im.profile)] ?? 0)
       : (summary._lteProfiles.get(im.profile)?.length ?? 0);
@@ -584,7 +582,7 @@ export async function scanMtkParts(parts, name, cancelled = () => false, hooks =
     settle();
   }
   // Tensor physical LTE banks without a capability/secondary profile still
-  // get a bank-only record (python profile_records).
+  // get a bank-only record.
   if (physical) {
     const indexed = new Set(records.map((r) => `${r.mtk.bankIndex}/${r.mtk.profile}`));
     for (const [b, byProfile] of Object.entries(physical)) {
@@ -607,7 +605,7 @@ export async function scanMtkParts(parts, name, cancelled = () => false, hooks =
       }
     }
   }
-  // python GUI rows are ordered by (bank, profile); records stay deduped
+  // Records are ordered by (bank, profile); they stay deduped
   // downstream by the main thread (name\0sha256 keys).
   records.sort((a, b) => a.mtk.bankIndex - b.mtk.bankIndex || a.mtk.profile - b.mtk.profile);
   if (cancelled()) return null;

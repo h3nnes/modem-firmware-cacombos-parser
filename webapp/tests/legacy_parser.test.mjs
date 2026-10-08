@@ -1,13 +1,13 @@
-// JS API shape (mirrors gui_version/legacy_rf_parser.py + qualcomm_rf_combo_analyzer.py):
+// JS API shape:
 //   validateCandidate(data: Uint8Array, image, descriptorOffset, { exhaustive }) -> layout | null
-//     layout: array of 11 positional fields copied from the Python tuple:
+//     layout: array of 11 positional fields:
 //       [0] comboCount  [1] combosOffset  [2] groupsOffset  [3] antennaCount
 //       [4] highestGroup  [5] countByteOffset  [6] comboSize  [7] groupSize
 //       [8] descriptorLayout  [9] bandGroupLayout  [10] antennaVa (number|null)
 //   makeDescriptor(data, image, descriptorOffset, layout?) -> Descriptor (camelCase fields)
 //   classifyDescriptor(data, descriptor) -> "endc" | "nrca" | "lteca" | "unknown"
 //   parseDescriptor(path: string, data, descriptor, { discovery, tableKind, detectedTableCount, embeddedPath? })
-//     -> object with the exact snake_case key layout of legacy_rf_parser.parse_descriptor
+//     -> object with the exact snake_case key layout
 //   parseLegacyModule(record: { name, inner_path }, blob: Uint8Array)
 //     -> { metadata, legacy_tables, combinations, components }
 //   readComboHeader(data, offset, countByteOffset=27) ->

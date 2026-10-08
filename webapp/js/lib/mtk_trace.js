@@ -1,5 +1,5 @@
-// Stage-D text exports for MTK DRDI cards: a text-exact port of the python
-// reference's mtk_trace.py — the two reconstructed capability logs the
+// Stage-D text exports for MTK DRDI cards: the two reconstructed capability
+// logs the
 // uecaps parser's MNR (ImportMtkNr) and M (ImportMTKLte) importers consume.
 // These are reconstructed records, not captured runtime traces: IDs belong to
 // each output file and reference the normalized firmware features.
@@ -20,7 +20,7 @@ export class TraceError extends Error {
   }
 }
 
-// EUTRA UL carrier counts per bandwidth class (mtk_trace.py LTE_WEIGHTS).
+// EUTRA UL carrier counts per bandwidth class.
 const LTE_WEIGHTS = [1, 2, 2, 3, 4, 5];
 const LAYERS = { 1: "ONE", 2: "TWO", 4: "FOUR", 8: "EIGHT" };
 
@@ -37,7 +37,7 @@ function classLetter(value) {
   return String.fromCharCode(65 + value);
 }
 
-// mtk_trace.py _header: the three lines every MTK trace file starts with.
+// The three lines every MTK trace file starts with.
 function header(device) {
   return [
     "# Reconstructed from MediaTek firmware; not a captured modem log.",
@@ -49,7 +49,7 @@ function header(device) {
 const FR2_MIN_BAND = 257;
 const NR_SCS_KHZ = [15, 30, 60, 120];
 
-// mtk_trace.py render_nr_trace: ordered NR DL/UL per-CC bandwidth, SCS, MIMO
+// Ordered NR DL/UL per-CC bandwidth, SCS, MIMO
 // and classes. Returns { text, meta }.
 export function renderNrTrace(combos, device) {
   bump("renderMtkNrTrace");
@@ -94,7 +94,7 @@ export function renderNrTrace(combos, device) {
 
   const featureSet = (rat, direction, ids) => {
     if (!ids.length) return "_0";
-    // python: (8 if DL else 4) for NR, else 5 EUTRA carriers per FS.
+    // Limits: (8 if DL else 4) for NR, else 5 EUTRA carriers per FS.
     const limit = rat === "N" ? (direction === "DL" ? 8 : 4) : 5;
     if (ids.length > limit) {
       throw new TraceError(`MTK importer supports at most ${limit} ${rat} ${direction} carriers per FS`);
@@ -175,7 +175,7 @@ export function renderNrTrace(combos, device) {
   };
 }
 
-// mtk_trace.py render_lte_log: the CA_COMB_INFO importer supports one 2/4-layer
+// LTE log: the CA_COMB_INFO importer supports one 2/4-layer
 // value per component. Returns { text, meta }.
 export function renderLteLog(combos, device) {
   bump("renderMtkLteLog");

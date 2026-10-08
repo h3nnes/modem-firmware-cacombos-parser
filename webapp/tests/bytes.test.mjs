@@ -13,7 +13,6 @@ test("struct reader reads LE formats and raises on short read", () => {
 });
 
 test("unpackFrom matches struct '<HHIHHIII>' fixture layout", () => {
-  // mirrors tests/test_hi_inline.py pack_into("<HHIHHIII>", ...)
   const fields = [0x0a0b, 0x0c0d, 0x10203040, 0x0102, 0x0304, 0x0506, 0x0708, 0x090a];
   const size = 2+2+4+2+2+4+4+4; // 24
   const buf = new ArrayBuffer(size); const dv = new DataView(buf);

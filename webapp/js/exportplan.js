@@ -2,29 +2,25 @@
 // main.js; this module only decides WHAT to export and HOW to deliver it:
 //
 // - buildExportJobs pairs the ticked cards with the enabled formats in a
-//   deterministic order (card list order x canonical format order), matching
-//   the Python GUI's export row (gui_version/main.py:156-207).
-// - deliveryMode picks individual downloads at Python-parity volume and a
-//   single zip once the file count would flood the browser's download shelf.
+//   deterministic order (card list order x canonical format order).
+// - deliveryMode picks individual downloads and a single zip once the file
+//   count would flood the browser's download shelf.
 // - dedupeFilenames gives zip entries collision-free names: record export
 //   names collide across images (the same card ships in several corpus
 //   images), so repeats get _2/_3/... before the extension, deterministically.
 // - decodeExportBytes decodes export payloads for download WITHOUT stripping
-//   the UTF-8 BOM that toCsvText emits for CSV/Web CSV (Python writes
-//   utf-8-sig; the default TextDecoder strips the BOM).
+//   the UTF-8 BOM that toCsvText emits for CSV/Web CSV (the default
+//   TextDecoder strips the BOM).
 
-// Canonical order mirrors the Python GUI's format checkboxes
-// (gui_version/main.py:84-90): mbn, json, csv, b0cd, b826. The webapp adds a
-// "webcsv" slot (the viewer's per-table CSVs, no Python counterpart) after csv,
-// and the MTK DRDI trace formats at the end. "mbn" is the raw .mbn blob under
-// record.name (Python export_module's "mbn" format); worker.js special-cases it
-// before exportModule.
+// Canonical format order: mbn, json, csv, b0cd, b826, with a "webcsv" slot
+// (the viewer's per-table CSVs) after csv and the MTK DRDI trace formats at
+// the end. "mbn" is the raw .mbn blob under record.name; worker.js
+// special-cases it before exportModule.
 export const EXPORT_FORMATS = ["mbn", "json", "csv", "webcsv", "b0cd", "b826", "mtk_nr", "mtk_lte"];
 
 // Formats only MTK DRDI cards can produce (the worker's MTK export arm):
 // a qcom/apple card ticked with them enabled is skipped silently instead of
-// failing the batch with "Unsupported export format" (main.py's
-// run_bank_extraction skipped-format rule, hoisted to the job planner).
+// failing the batch with "Unsupported export format".
 const MTK_ONLY_FORMATS = new Set(["mtk_nr", "mtk_lte"]);
 
 // >20 exported files → deliver one zip instead of that many downloads.
@@ -78,8 +74,7 @@ export function dedupeFilenames(names) {
 
 // BOM-preserving UTF-8 decode for download payloads. TextDecoder's default
 // strips a leading U+FEFF ("ignoreBOM: true" means KEEP it — the flag names
-// the *error*, not the byte); Python writes utf-8-sig, so Excel-relevant CSVs
-// must keep the BOM to be byte-identical.
+// the *error*, not the byte) so Excel-relevant CSVs keep their BOM.
 export function decodeExportBytes(bytes) {
   return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
 }

@@ -1,7 +1,7 @@
-// MTK Stage-D tests: the reconstructed trace logs (webapp/js/lib/mtk_trace.js,
-// a text-exact port of the python reference's mtk_trace.py). Synthetic pins
-// carry python-generated expected texts (mtk-drdi-combo-parser/mtk_trace.py on
-// the same fixtures): the shared 3-line header, FSpCC/FS registration order
+// MTK Stage-D tests: the reconstructed trace logs (webapp/js/lib/mtk_trace.js).
+// Synthetic pins carry python-generated expected texts (mtk-drdi-combo-parser/
+// mtk_trace.py on the same fixtures): the shared 3-line header, FSpCC/FS
+// registration order
 // and dedup, the FS carrier limits (NR DL 8 / UL 4 / EUTRA 5), the 1-based FSC
 // indices with the CA block's idx-1 labels, the family tally, and every
 // TraceError message. The corpus-gated BYTE differential for both trace

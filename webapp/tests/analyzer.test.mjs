@@ -1,7 +1,7 @@
-// JS API shape (mirrors gui_version/qualcomm_rf_combo_analyzer.py):
+// JS API shape:
 //   scanSource(source, name) -> { records: [ModuleRecord...], warnings: [{ tool, message }] }
-//     ModuleRecord: plain object with the Python dataclass fields (snake_case,
-//     dataclass declaration order) plus identity via recordIdentity().
+//     ModuleRecord: plain object with snake_case fields in declaration order
+//     plus identity via recordIdentity().
 //   recordJson(record) -> exact tools/generate_goldens.py record_json layout
 //   parseModule(record, blob) -> parseLegacyModule | parseModernModule dispatch
 //   generateWebTables(combinations, components) -> { lte_ca, nr_ca, endc, nrdc }
@@ -599,7 +599,7 @@ test("exportModule csv/json/webcsv produce Python-shaped files", () => {
   assert.throws(() => exportModule(record, parsed, "mbn"), ToolError);
 });
 
-// --- regression: scanSource FAT read semantics (Python scan_source:226) --------
+// --- regression: scanSource FAT read semantics --------------------------------
 
 // Python-verified digests (probe: gui scan_source over the same fixture bytes).
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -730,7 +730,7 @@ test("formatScsVal stays exact for large SCS codes", () => {
   assert.equal(formatScsVal("x"), "15");
 });
 
-// --- regression: deduplicateRecords empty-sha parity (analyzer.py:347-383) -----
+// --- regression: deduplicateRecords empty-sha parity --------------------------
 
 test("deduplicateRecords keeps falsy-sha records like the Python OSError fallback", () => {
   const emptySha = (innerPath) => ({
@@ -758,7 +758,7 @@ test("deduplicateRecords keeps falsy-sha records like the Python OSError fallbac
   assert.deepEqual(dup.map((r) => r.inner_path), ["/1"]);
 });
 
-// --- regression: sortRecords BigInt ids (Python exact int tuple, :334-344) -----
+// --- regression: sortRecords BigInt ids (exact int tuple) ---------------------
 
 test("sortRecords compares BigInt ids like Python's exact int tuple", () => {
   const rec = (innerPath, hwid, extra = {}) => ({

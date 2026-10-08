@@ -1,6 +1,5 @@
-// Browser download helpers. Filenames mirror viewer.py export_current_tab_csv
-// (:731-733): rf_config_<identity>_<label lower>.csv when the card has an
-// identity, <label lower>_combos.csv otherwise.
+// Browser download helpers. CSV filenames are rf_config_<identity>_<label
+// lower>.csv when the card has an identity, <label lower>_combos.csv otherwise.
 export const TAB_LABELS = { lte_ca: "LTE", nr_ca: "NRCA", endc: "ENDC", nrdc: "NRDC" };
 
 export function csvFilename(identity, label) {

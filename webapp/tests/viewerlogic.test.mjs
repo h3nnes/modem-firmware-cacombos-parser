@@ -1,6 +1,6 @@
-// Unit tests for the main-thread pure viewer logic ported from viewer.py:
-// apply_filter (:467-502 incl. the 5319687 re-sort-on-filter fix), the count
-// label strings, _layout_columns' SCS visibility rule (:261) and TAB_DEFINITIONS.
+// Unit tests for the main-thread pure viewer logic: apply_filter (incl. the
+// 5319687 re-sort-on-filter fix), the count label strings, the SCS column
+// visibility rule and TAB_DEFINITIONS.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -32,8 +32,8 @@ const ROWS = [
 // nospace row texts:    "1a+3a2+215"        / "42e430+30"       / "7a215"
 
 test("TAB_DEFINITIONS mirror viewer.py (label, table key) pairs", () => {
-  // Qualcomm/Apple tabs keep viewer.py's order; "NR SA" is the MediaTek-only
-  // single-carrier tab from mtk_viewer.py (only shown when an MTK card has rows).
+  // Qualcomm/Apple tabs keep their fixed order; "NR SA" is the MediaTek-only
+  // single-carrier tab (only shown when an MTK card has rows).
   assert.deepEqual(TAB_DEFINITIONS.filter(([, key]) => key !== "nr_sa"), [
     ["LTE", "lte_ca"],
     ["NRCA", "nr_ca"],
@@ -233,7 +233,7 @@ test("sortRows tie order follows input order (Python stable sort), both directio
     sortRows(rows, "c").map((r) => r.n),
     ["mid2", "first", "second", "mid", "nonnumeric"],
   );
-  // reverse=True flips comparison, NOT tie order (viewer.py sort(reverse=True)).
+  // reverse=True flips comparison, NOT tie order (stable sort).
   assert.deepEqual(
     sortRows(rows, "c", true).map((r) => r.n),
     ["nonnumeric", "mid", "first", "second", "mid2"],

@@ -5,10 +5,8 @@
 // [u32 comp_size]; the compressed stream is data[offset+12 .. +comp_size] and
 // must start with the bvx2 magic (checked by the analyzer, not here, so a bad
 // envelope can surface a scan warning instead of vanishing).
-// Ported from the Python reference apple_containers.py (iter_ftab_entries +
-// unwrap_ftab_bytes walk + unwrap_archive bbfw branches): non-CR tags are
-// ignored, reserved != 0 stops the walk like Python's `res != 0 -> break`,
-// CR entries with size - 12 != comp are skipped like Python's unwrap.
+// Walk rules: non-CR tags are ignored, reserved != 0 stops the walk, and
+// CR entries with size - 12 != comp are skipped rather than fatal.
 import { zipEntries, zipEntryData } from "./extractor.js";
 
 export const FTAB_MAGIC_OFFSET = 0x20;
@@ -17,7 +15,7 @@ const ENTRY_STRIDE = 16;
 const ENVELOPE_SIZE = 12;
 const FTAB_MAGIC = "rkosftab";
 
-// is_ftab_stream_with_cr's 64 KiB header window (entry table lives in it).
+// 64 KiB header window (the entry table lives in it).
 const FTAB_SNIFF_WINDOW = 65536;
 
 export function isFtab(data /* Uint8Array */) {
@@ -28,8 +26,8 @@ export function isFtab(data /* Uint8Array */) {
   return true;
 }
 
-// True when at least one CR-tagged entry exists in the entry table (Python
-// is_ftab_stream_with_cr: the walk stays inside the sniffed header window).
+// True when at least one CR-tagged entry exists in the entry table; the
+// walk stays inside the sniffed header window.
 function ftabHasCrEntries(data) {
   const limit = Math.min(data.length, FTAB_SNIFF_WINDOW);
   let off = FTAB_TABLE_OFF;
@@ -58,14 +56,14 @@ export function parseFtabEntries(data) {
         break;
       }
     }
-    if (!printable) break; // Python iter_ftab_entries: non-ASCII tag ends the walk
+    if (!printable) break; // non-ASCII tag ends the walk
     const tag = String.fromCharCode(data[off], data[off + 1], data[off + 2], data[off + 3]);
     const eoff = dv.getUint32(off + 4, true);
     const size = dv.getUint32(off + 8, true);
     const res = dv.getUint32(off + 12, true);
     if (res !== 0 || eoff > data.length || eoff + size > data.length) break;
     if (tag.startsWith("CR")) {
-      // Python unwrap_ftab_bytes: malformed CR entries are skipped, not fatal.
+      // Malformed CR entries are skipped, not fatal.
       if (eoff + ENVELOPE_SIZE > data.length) {
         off += ENTRY_STRIDE;
         continue;
@@ -89,7 +87,7 @@ export function parseFtabEntries(data) {
     }
     off += ENTRY_STRIDE;
   }
-  // Python returns extracted banks sorted by name (lower()).
+  // Extracted banks are sorted by name (case-insensitive).
   return entries.sort((a, b) => {
     const an = a.name.toLowerCase();
     const bn = b.name.toLowerCase();
@@ -114,10 +112,10 @@ async function asZipSource(bytesOrSource, readFn) {
 }
 
 // bbfw: zip container whose members include one named *ftab* member
-// (case-insensitive substring). Mirrors Python unwrap_archive's discovery
-// order: nested .bbfw members first (either a raw FTAB at +0x20 or a nested
-// zip holding an ftab member), then direct ftab members with Python's
-// c40/cellular/centauri priority sort. Returns { data, memberName, descriptors }
+// (case-insensitive substring). Discovery order: nested .bbfw members first
+// (either a raw FTAB at +0x20 or a nested zip holding an ftab member), then
+// direct ftab members with a c40/cellular/centauri priority sort. Returns
+// { data, memberName, descriptors }
 // where data is the inflated ftab member bytes (descriptors index into them)
 // and memberName is the zip member the ftab came from; Error if absent.
 export async function findFtabMemberInBbfw(bytesOrVFile, readFn = null) {
@@ -131,7 +129,7 @@ export async function findFtabMemberInBbfw(bytesOrVFile, readFn = null) {
     try {
       nested = await zipEntryData(source, entry);
     } catch {
-      continue; // unreadable member: try the next one like Python's try/except
+      continue; // unreadable member: try the next one
     }
     if (nested.length >= 0x28 && isFtab(nested)) {
       return { data: nested, memberName: entry.name, descriptors: parseFtabEntries(nested) };
@@ -146,7 +144,7 @@ export async function findFtabMemberInBbfw(bytesOrVFile, readFn = null) {
     }
   }
 
-  // 2. Direct ftab members; Python prioritizes cellular/c40xx/centauri names.
+  // 2. Direct ftab members; cellular/c40xx/centauri names are prioritized.
   const ftabMembers = entries.filter((e) => e.name.toLowerCase().includes("ftab"));
   const priority = (name) => {
     const lower = name.toLowerCase();
@@ -200,7 +198,7 @@ export async function extractFtabMember(source, memberName) {
 }
 
 // Source-based FTAB entry walk for the fast scan path: reads only the 64 KiB
-// header window (entry table lives in it, like Python is_ftab_stream_with_cr)
+// header window (the entry table lives in it)
 // plus one 12-byte envelope per CR entry — the compressed streams are read
 // separately by the caller, per descriptor. Same walk rules as
 // parseFtabEntries (non-ASCII tag or reserved != 0 ends the walk; CR entries

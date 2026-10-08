@@ -1,5 +1,4 @@
-// Apple BBCFG/MAVZ layer (iphone_rf_parser.py port + the EFS scan of
-// image_extractor.py:551-593). Synthetic fixtures only - the corpus contains
+// Apple BBCFG/MAVZ layer. Synthetic fixtures only - the corpus contains
 // no iPhone records (every corpus generation is 'Legacy ELF'/'DAT/protobuf'
 // from Android containers). Differential-checked against CPython during
 // development: iter_rfcards on the synthetic bbcfg reproduces the same card
@@ -132,7 +131,7 @@ test("extractBbcfgTree writes cards and rfcard_info_all sidecars into rfcards/",
   assert.equal(json.cards.length, 1);
   assert.equal(json.cards[0].filename, "rf_config_99_1_0.mbn");
   assert.ok(json.cards[0].bbcfg_offset.startsWith("0x"));
-  // container_info (iphone_rf_parser.py:167-180) hashes the whole blob
+  // container_info hashes the whole blob
   assert.equal(json.container.sha256, sha256Hex(blob));
   const csv = new TextDecoder().decode(await rfcards.entries.get("rfcard_info_all.csv").read());
   assert.ok(csv.startsWith("ordinal,hwid,fset,synthetic_bid,"));

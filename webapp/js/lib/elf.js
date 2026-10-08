@@ -1,6 +1,6 @@
-// Minimal ELF32 little-endian reader; port of Elf32Image (legacy_rf_parser.py:386-611).
+// Minimal ELF32 little-endian reader.
 // No external ELF package is required. Works on the whole MBN blob (Uint8Array).
-// ParseError messages mirror the Python originals byte for byte.
+// ParseError message wording is part of the tool's error contract.
 import { StructReader, indexOfBytes, utf8 } from "./bytes.js";
 
 export class ParseError extends Error {
@@ -107,13 +107,13 @@ export class Elf32Image {
     return null;
   }
 
-  // Same role as the Python generator: [start, end] pairs per load segment.
+  // [start, end] pairs per load segment.
   mappedFileRanges() {
     return this.loadSegments.map((segment) => [segment.fileOffset, segment.fileOffset + segment.fileSize]);
   }
 
   // Reads the SysV dynamic symbol table without section headers; DT_HASH
-  // supplies the exact symbol count. Python: legacy_rf_parser.py:512-611.
+  // supplies the exact symbol count.
   dynamicSymbols() {
     const data = this.data;
     const r = new StructReader(data);

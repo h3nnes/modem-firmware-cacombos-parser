@@ -1,7 +1,6 @@
-// Android sparse image layer: header parse/validate (image_extractor.py:180-206),
-// chunk-table SparseReader (never materializes the unsparsed image), and the
-// embedded-container scan (image_extractor.py:150-210 + the Motorola
-// SINGLE_N_LONELY wrapper noted at :153-156).
+// Android sparse image layer: header parse/validate, chunk-table SparseReader
+// (never materializes the unsparsed image), and the embedded-container scan
+// (incl. the Motorola SINGLE_N_LONELY wrapper).
 //
 // Chunk header layout was decoded empirically from corpus radio.img (12 chunks,
 // block sum == totalBlocks == 101120): <HHII> type/reserved/output-blocks/

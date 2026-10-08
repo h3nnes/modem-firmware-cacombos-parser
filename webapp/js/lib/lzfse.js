@@ -1,4 +1,4 @@
-// Decode-only JS port of Apple's LZFSE reference decoder (BSD-3), from
+// Decode-only JS implementation of Apple's LZFSE reference decoder (BSD-3):
 // src/lzfse_decode.c, lzfse_decode_base.c, lzfse_fse.c/.h, lzfse_internal.h and
 // lzvn_decode_base.c — https://github.com/lzfse/lzfse
 //
