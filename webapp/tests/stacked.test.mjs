@@ -223,10 +223,13 @@ test("portrait: #app switches to page-scroll sizing (height auto, min-height dvh
   assert.ok(vh < dv, "100dvh must follow 100vh (fallback order)");
 });
 
-test("portrait: nested scrollers are opened (table wrap, compare)", async () => {
+test("portrait: table rows stay page-flowed, wide tables pan inside the wrap", async () => {
   const block = await readMediaQueryBlock();
-  assert.ok(ruleInside(block, ".cv-tablewrap {").includes("overflow: visible"),
-    ".cv-tablewrap must not scroll internally in portrait");
+  const wrapRule = ruleInside(block, ".cv-tablewrap {");
+  assert.ok(wrapRule.includes("overflow-x: auto"),
+    ".cv-tablewrap must clip wide tables horizontally (a max-content table must never widen the page)");
+  assert.ok(!/overflow\s*:/.test(wrapRule),
+    "no shorthand overflow: the y-axis keeps page-flow (rows grow the document)");
   assert.ok(ruleInside(block, ".compare {").includes("overflow: visible"),
     ".compare must not scroll internally in portrait");
 });

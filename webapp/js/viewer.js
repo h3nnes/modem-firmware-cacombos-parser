@@ -374,6 +374,7 @@ export class ComboViewer {
     this.virtual = false; // current tab paints a viewport window
     this.rowHeight = 0; // measured from the first rendered row
     this.renderRaf = null; // scroll re-render coalescing
+    this.renderedScrollTop = 0; // scrollTop the last renderRows painted
     this.showScs = false;
     this.filterTimer = null;
     this.filterRowEl = null;
@@ -658,6 +659,7 @@ export class ComboViewer {
     const range = virtual
       ? visibleRange(total, this.tableWrapEl.scrollTop, viewport, rowHeight)
       : { start: 0, end: total };
+    this.renderedScrollTop = this.tableWrapEl.scrollTop; // horizontal pans (unchanged scrollTop) must not re-render
     const colspan = Math.max(1, state.visible.length);
     const html = [];
     if (virtual) {
@@ -915,6 +917,9 @@ export class ComboViewer {
         this.renderRaf = null;
         const active = this.tab();
         if (!active) return;
+        // Horizontal panning (portrait x-scroller) fires scroll events with an
+        // unchanged scrollTop — the row window would be identical, so skip.
+        if (this.tableWrapEl.scrollTop === this.renderedScrollTop) return;
         this.renderRows(active);
         this.applySelection();
       });

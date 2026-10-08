@@ -727,7 +727,13 @@ body.dragging {
   }
 
   .cv-tablewrap {
-    overflow: visible;
+    /* Rows keep page-flowing (the wrap's height grows with the table, so the
+       y-axis never overflows here); only the x-axis clips: a max-content
+       table wider than the viewport must pan inside the pane, never widen
+       the page itself. Note: this makes the wrap the sticky thead's scroll
+       container, so in portrait the header pins to the wrap (pans with the
+       columns) instead of the viewport. */
+    overflow-x: auto;
     min-height: 0;
   }
 
