@@ -3,7 +3,7 @@
 // identity, generation, LTE/NR counts), detect-and-warn warnings panel and the
 // IndexedDB card-table cache (sha256-keyed). All parsing lives in worker.js;
 // this module only handles JSON rows, exactly like the viewer contract.
-import { ComboViewer } from "./viewer.js";
+import { ComboViewer, resetViewerState } from "./viewer.js";
 import { compareCards } from "./compare.js";
 import { download, downloadBytes } from "./exporter.js";
 import {
@@ -882,6 +882,9 @@ async function clearAll() {
   els.warnings.replaceChildren();
   els.warnings.hidden = true;
   destroyViewer();
+  // Reset AFTER the teardown: destroy() just captured the dying viewer's
+  // state, and Clear must not hand it to the next opened card.
+  resetViewerState();
   els.viewerHost.replaceChildren(els.viewerPlaceholder);
   resetCardList();
   renderLoadedFiles();

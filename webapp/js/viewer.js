@@ -3,6 +3,9 @@
 // rule, zebra rows, band-token coloring via bandcolors with a memoized color
 // map, header-click sort with ▲/▼ indicators, selection click/ctrl/shift,
 // the three-item copy context menu, per-tab CSV export and the info banner).
+// - Cross-card state persistence: the active tab, per-tab column filters/sort
+//   and the global search text survive switching cards (capture on destroy,
+//   prune+restore on construct, reset on Clear).
 // - Sorting/filtering run on the already-JSON table rows in the main thread;
 //   nothing here re-parses. The renderer touches the DOM only through the
 //   ComboViewer class, so the pure helpers stay unit-testable in Node.
@@ -239,6 +242,58 @@ export function memoBandIndex(canonical) {
   return index;
 }
 
+// --- cross-card viewer state (module-level, session-scoped) -------------------------
+
+// What survives switching cards: the active tab (by table key), the global
+// search text and, per tab, its column filters and sort. NOT persisted: row
+// selection (card-specific), column widths/overrides (fresh layout per card)
+// and any rows. Captured in destroy(), restored by the next ComboViewer
+// constructor, reset by main.js on Clear (after the destroy-capture).
+let savedViewerState = null;
+
+export function resetViewerState() {
+  savedViewerState = null;
+}
+
+// Faithful snapshot of the persistable state. `tabs` is the ComboViewer tabs
+// Map (tblKey -> state); only colFilters/sortCol/sortReverse are read and the
+// filter objects are copied, so later edits cannot leak into the snapshot.
+export function captureViewerState(activeKey, query, tabs) {
+  const perTab = {};
+  for (const [tblKey, state] of tabs ?? []) {
+    perTab[tblKey] = {
+      colFilters: { ...(state.colFilters ?? {}) },
+      sortCol: state.sortCol ?? null,
+      sortReverse: !!state.sortReverse,
+    };
+  }
+  return { activeKey: activeKey ?? null, query: String(query ?? ""), tabs: perTab };
+}
+
+// Validity pass against the NEXT card (columnsByKey: tblKey -> columns): tabs
+// without rows are not rendered (their entry is dropped), filters on columns
+// the new card lacks are dropped, whitespace-only filters are dropped and a
+// sort column that no longer exists resets to unsorted. The active tab only
+// survives when the new card renders it — otherwise the constructor falls back
+// to the default first tab. Pure: the saved state is never mutated.
+export function pruneViewerState(saved, columnsByKey) {
+  if (!saved) return null;
+  const tabs = {};
+  for (const [tblKey, savedTab] of Object.entries(saved.tabs ?? {})) {
+    const columns = columnsByKey[tblKey];
+    if (!columns) continue;
+    const colSet = new Set(columns);
+    const colFilters = {};
+    for (const [col, raw] of Object.entries(savedTab.colFilters ?? {})) {
+      if (colSet.has(col) && String(raw ?? "").trim() !== "") colFilters[col] = raw;
+    }
+    const sortCol = savedTab.sortCol != null && colSet.has(savedTab.sortCol) ? savedTab.sortCol : null;
+    tabs[tblKey] = { colFilters, sortCol, sortReverse: sortCol !== null && !!savedTab.sortReverse };
+  }
+  const activeKey = saved.activeKey != null && columnsByKey[saved.activeKey] ? saved.activeKey : null;
+  return { activeKey, query: String(saved.query ?? ""), tabs };
+}
+
 // --- renderer ----------------------------------------------------------------------
 
 const CELL_FONT_CSS = "13px ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
@@ -390,12 +445,28 @@ export class ComboViewer {
 
     this.bindEvents();
 
+    // Restore the previous viewer's state (active tab, per-tab filters/sort,
+    // global search), pruned to what this card renders. Everything flows
+    // through the normal applyFilter/render path below — nothing bypasses it.
+    const columnsByKey = {};
+    for (const [tblKey, state] of this.tabs) columnsByKey[tblKey] = state.columns;
+    const saved = pruneViewerState(savedViewerState, columnsByKey);
+    if (saved) {
+      for (const [tblKey, savedTab] of Object.entries(saved.tabs)) {
+        const state = this.tabs.get(tblKey);
+        state.colFilters = savedTab.colFilters;
+        state.sortCol = savedTab.sortCol;
+        state.sortReverse = savedTab.sortReverse;
+      }
+      if (saved.query) this.searchEl.value = saved.query;
+    }
+
     if (this.tabs.size === 0) {
       this.tabsEl.innerHTML = `<button class="cv-tab active" type="button" disabled>Empty</button>`;
       this.emptyEl.hidden = false;
       this.countEl.textContent = EMPTY_COUNT_LABEL;
     } else {
-      this.activeKey = this.tabs.keys().next().value;
+      this.activeKey = saved && this.tabs.has(saved.activeKey) ? saved.activeKey : this.tabs.keys().next().value;
       this.renderTabs();
       this.applyFilter();
     }
@@ -922,6 +993,9 @@ export class ComboViewer {
   }
 
   destroy() {
+    // Capture before teardown: the next constructed viewer restores this
+    // (main.js's Clear resets it right after this capture).
+    savedViewerState = captureViewerState(this.activeKey, this.searchEl.value, this.tabs);
     clearTimeout(this.statusTimer);
     clearTimeout(this.filterTimer);
     if (this.renderRaf) cancelAnimationFrame(this.renderRaf);
