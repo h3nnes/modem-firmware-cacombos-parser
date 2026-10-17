@@ -131,6 +131,33 @@ test("main.js card list appends rows incrementally behind delegated listeners", 
   assert.ok(source.includes("cardsByKey.set(key, card)"), "row clicks resolve through the key map");
 });
 
+test("arrow-key card navigation + no search auto-focus on card open", async () => {
+  const main = await readWebappFile("js", "main.js");
+  assert.ok(
+    main.includes("function selectCard(card, { scrollIntoView = false } = {})"),
+    "click and arrows share one selection step",
+  );
+  assert.ok(
+    main.includes('event.key !== "ArrowDown" && event.key !== "ArrowUp"'),
+    "one document-level Up/Down handler",
+  );
+  assert.ok(
+    main.includes('event.target.closest("input, textarea, select, [contenteditable]")'),
+    "typing targets keep their caret movement",
+  );
+  assert.ok(
+    main.includes('event.ctrlKey || event.metaKey || event.altKey || event.shiftKey'),
+    "modified arrows pass through to browser/OS shortcuts",
+  );
+  assert.ok(main.includes('tr.scrollIntoView({ block: "nearest" })'), "navigation scrolls the row into view");
+  const viewer = await readWebappFile("js", "viewer.js");
+  assert.equal(
+    viewer.split("this.searchEl.focus()").length - 1,
+    2,
+    "search focus stays on user actions only (✕ clear button, Ctrl/Cmd+F) — opening a card must not yank focus",
+  );
+});
+
 test("viewer.js search: lazy per-tab index + no-copy fast path", async () => {
   const source = await readWebappFile("js", "viewer.js");
   assert.ok(source.includes("export function createRowSearchIndex(rows)"), "a per-tab row index exists");

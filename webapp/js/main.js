@@ -369,10 +369,41 @@ els.cardBody.addEventListener("click", (event) => {
   if (!tr) return;
   const card = cardsByKey.get(tr.dataset.cardKey);
   if (!card) return;
+  selectCard(card);
+});
+
+// Shared selection step for click and arrow-key navigation: mark the row
+// selected and open the card. A superseded open cancels the previous parse
+// request (openCard), so rapid arrowing never piles up parses.
+function selectCard(card, { scrollIntoView = false } = {}) {
   selectedCard = card;
   for (const other of cardRows.values()) other.classList.remove("selected");
-  tr.classList.add("selected");
+  const tr = cardRows.get(card.key);
+  if (tr) {
+    tr.classList.add("selected");
+    if (scrollIntoView) tr.scrollIntoView({ block: "nearest" });
+  }
   openCard(card);
+}
+
+// Arrow-key navigation over the card list (Up = previous card, Down = next),
+// mirroring a row click. Plain arrows only: modifiers pass through (browser /
+// OS shortcuts) and typing targets (inputs, textareas, selects, contenteditables)
+// keep their caret movement. With nothing selected, Down starts at the first
+// card and Up at the last; the ends are hard stops (no wrap-around).
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (!cards.length) return;
+  const index = selectedCard ? cards.findIndex((c) => c.key === selectedCard.key) : -1;
+  let next;
+  if (index === -1) next = event.key === "ArrowDown" ? 0 : cards.length - 1;
+  else {
+    next = index + (event.key === "ArrowDown" ? 1 : -1);
+    if (next < 0 || next >= cards.length) return;
+  }
+  selectCard(cards[next], { scrollIntoView: true });
 });
 
 // Reflect the checked set into the listed rows' checkboxes + the compare button

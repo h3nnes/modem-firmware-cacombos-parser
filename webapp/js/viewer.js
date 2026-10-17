@@ -538,7 +538,9 @@ export class ComboViewer {
       this.renderTabs();
       this.applyFilter();
     }
-    this.searchEl.focus();
+    // No search auto-focus: opening a card (click or arrow key) must not yank
+    // focus — arrow-key card navigation relies on the keydown landing on the
+    // document. Ctrl/Cmd+F still focuses the search field on demand.
   }
 
   tab() {
