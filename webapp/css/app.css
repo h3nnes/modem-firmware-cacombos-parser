@@ -412,22 +412,19 @@ body.dragging {
   flex: none;
 }
 
-/* Per-card overall band summary (viewer.js renderBandSummary): one wrapped row
-   per bucket (LTE / NSA / SA), always expanded. The token list is inline (not
-   flex-gapped) so the comma-separated tokens sit flush together. */
+/* Per-card overall band summary (viewer.js renderBandSummary): one label +
+   token-list pair per bucket (LTE / NSA / SA), always expanded. The pairs are
+   direct children of ONE shared grid, so the widest label sizes the label
+   column for every row and all lists start at the same x. The list cell's
+   content is inline (not flex-gapped) so the comma-separated tokens sit flush
+   together and wrap naturally. */
 .cv-bands {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13px;
-  flex: none;
-}
-
-.cv-bands-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: max-content 1fr;
   align-items: baseline;
   gap: 2px 6px;
+  font-size: 13px;
+  flex: none;
 }
 
 .cv-bands-label {

@@ -551,17 +551,17 @@ export class ComboViewer {
 
   // One-time per-card strip between the banner and the search row: the overall
   // supported LTE / NSA / SA bands (DL union per bucket, deduped, sorted), one
-  // row per bucket. Tokens render prefix-stripped and comma-separated without
-  // whitespace (the commas are plain text nodes between inline colored spans —
-  // the color still keys on the full canonical, matching the table cells).
-  // Static card data — no tab, filter, sort or search interaction; empty rows
-  // are skipped and a bandless card keeps the strip hidden.
+  // label + list pair per bucket. Tokens render prefix-stripped and
+  // comma-separated without whitespace (the commas are plain text nodes
+  // between inline colored spans — the color still keys on the full canonical,
+  // matching the table cells). Labels and lists are direct children of the
+  // shared `.cv-bands` grid so every list starts at the same x. Static card
+  // data — no tab, filter, sort or search interaction; empty rows are skipped
+  // and a bandless card keeps the strip hidden.
   renderBandSummary({ lte, nsa, sa }) {
     if (!lte.length && !nsa.length && !sa.length) return;
     for (const [label, bands] of [["LTE", lte], ["NSA", nsa], ["SA", sa]]) {
       if (!bands.length) continue;
-      const row = document.createElement("div");
-      row.className = "cv-bands-row";
       const labelEl = document.createElement("span");
       labelEl.className = "cv-bands-label";
       labelEl.textContent = `${label} (${bands.length.toLocaleString("en-US")}):`;
@@ -573,8 +573,7 @@ export class ComboViewer {
         token.textContent = canonical.slice(1); // strip the B/n RAT prefix for display
         listEl.appendChild(token);
       });
-      row.append(labelEl, listEl);
-      this.bandsEl.appendChild(row);
+      this.bandsEl.append(labelEl, listEl);
     }
     this.bandsEl.hidden = false;
   }
