@@ -12,18 +12,18 @@ import {
   countLabelText,
   visibleColumns,
   infoBannerParts,
-  memoBandColor,
   sortRows,
   compareKeys,
   bandSortKey,
   columnSortKey,
   charCount,
   createRowSearchIndex,
+  memoBandColorClass,
   BAND_SUMMARY_SOURCES,
   collectCardBands,
   compareCanonicalBands,
 } from "../js/viewer.js";
-import { bandColor } from "../js/lib/bandcolors.js";
+import { bandColorIndex } from "../js/lib/bandcolors.js";
 
 // apply_filter joins str(v) for v in row.values() — VALUES only, no headers.
 const ROWS = [
@@ -185,11 +185,15 @@ test("infoBannerParts mirrors viewer.py:183-197", () => {
   assert.deepEqual(infoBannerParts({ size: 1536 }), ["Size: 1.5 KB"]);
 });
 
-test("memoBandColor caches bandColor results (viewer renders ~296 bands per card)", () => {
-  assert.equal(memoBandColor("B3"), bandColor("B3"));
-  assert.equal(memoBandColor("n78"), bandColor("n78"));
+test("memoBandColorClass caches bandColorClass results (one class per canonical)", () => {
+  // Same band number -> same class, LTE or NR alike.
+  assert.equal(memoBandColorClass("B3"), "band-n3");
+  assert.equal(memoBandColorClass("n3"), "band-n3");
+  assert.equal(memoBandColorClass("n78"), "band-n78");
   // Second call must come from the cache: identical result, identical identity.
-  assert.equal(memoBandColor("B3"), memoBandColor("B3"));
+  assert.equal(memoBandColorClass("B3"), memoBandColorClass("B3"));
+  // Numbers outside BAND_NUMBER_COLORS fall back to the md5 palette class.
+  assert.equal(memoBandColorClass("n999"), `band-c${bandColorIndex("n999")}`);
 });
 
 // --- sortRows (Rec-3: decorate-sort-undecorate must keep order identical) ---------

@@ -1,16 +1,18 @@
 // ComboViewer: the table viewer UI (tabs, band sorting, filter re-sort,
 // apply-filter with nospace fallback + count label strings, SCS visibility
-// rule, zebra rows, band-token coloring via bandcolors with a memoized color
-// map, header-click sort with ▲/▼ indicators, selection click/ctrl/shift,
-// the three-item copy context menu, per-tab CSV export, the info banner and
-// the per-card overall LTE/NSA/SA band summary rows above the tabs).
+// rule, zebra rows, band-token coloring via bandcolors' static band-number
+// palette (one color per band number, LTE and NR alike; md5-palette fallback)
+// with a memoized class map, header-click sort with ▲/▼ indicators, selection
+// click/ctrl/shift, the three-item copy context menu, per-tab CSV export, the
+// info banner and the per-card overall LTE/NSA/SA band summary rows above the
+// tabs).
 // - Cross-card state persistence: the active tab, per-tab column filters/sort
 //   and the global search text survive switching cards (capture on destroy,
 //   prune+restore on construct, reset on Clear).
 // - Sorting/filtering run on the already-JSON table rows in the main thread;
 //   nothing here re-parses. The renderer touches the DOM only through the
 //   ComboViewer class, so the pure helpers stay unit-testable in Node.
-import { BAND_COLUMN_HEADERS, bandSegments, bandColor, bandColorIndex } from "./lib/bandcolors.js";
+import { BAND_COLUMN_HEADERS, BAND_NUMBER_COLORS, bandSegments, bandColorClass } from "./lib/bandcolors.js";
 import { pyCasefold } from "./lib/modern_parser.js";
 import { toCsvText } from "./lib/analyzer.js";
 import { csvFilename, download } from "./exporter.js";
@@ -271,27 +273,36 @@ export function collectCardBands(tables) {
 
 // --- memoized band colors (one color per canonical band) --------------------------
 
-const BAND_COLOR_MEMO = new Map();
-const BAND_INDEX_MEMO = new Map();
+const BAND_CLASS_MEMO = new Map();
 
-export function memoBandColor(canonical) {
-  let color = BAND_COLOR_MEMO.get(canonical);
-  if (color === undefined) {
-    color = bandColor(canonical);
-    BAND_COLOR_MEMO.set(canonical, color);
+// Memoized bandColorClass: the static band-number class (`band-n<k>`, same
+// color for LTE and NR) or the md5-palette fallback (`band-c<idx>`) for
+// numbers outside BAND_NUMBER_COLORS.
+export function memoBandColorClass(canonical) {
+  let cls = BAND_CLASS_MEMO.get(canonical);
+  if (cls === undefined) {
+    cls = bandColorClass(canonical);
+    BAND_CLASS_MEMO.set(canonical, cls);
   }
-  return color;
+  return cls;
 }
 
-// Palette index for the `.band-c<index>` class; same md5 reduction as
-// memoBandColor, memoized the same way.
-export function memoBandIndex(canonical) {
-  let index = BAND_INDEX_MEMO.get(canonical);
-  if (index === undefined) {
-    index = bandColorIndex(canonical);
-    BAND_INDEX_MEMO.set(canonical, index);
-  }
-  return index;
+// The static band-number palette ships as one injected <style> sheet (built
+// from BAND_NUMBER_COLORS) so large tbodies keep class-based coloring with no
+// inline style attributes. Injected once per page, on the first viewer
+// construction — feature-checked because Node unit tests import viewer.js
+// without a DOM.
+let bandNumberStylesInjected = false;
+
+function ensureBandNumberStyles() {
+  if (bandNumberStylesInjected || typeof document === "undefined") return;
+  bandNumberStylesInjected = true;
+  const style = document.createElement("style");
+  style.id = "band-number-colors";
+  style.textContent = [...BAND_NUMBER_COLORS]
+    .map(([num, color]) => `.cv .band-n${num}{color:${color};}`)
+    .join("");
+  document.head.appendChild(style);
 }
 
 // --- cross-card viewer state (module-level, session-scoped) -------------------------
@@ -395,7 +406,7 @@ function bandCellHtml(cell, header) {
   const segments = bandSegments(cell, header);
   if (!segments.length) return esc(cell);
   return segments
-    .map((seg) => (seg.canonical ? `<span class="cv-band band-c${memoBandIndex(seg.canonical)}">${esc(seg.text)}</span>` : esc(seg.text)))
+    .map((seg) => (seg.canonical ? `<span class="cv-band ${memoBandColorClass(seg.canonical)}">${esc(seg.text)}</span>` : esc(seg.text)))
     .join(" + ");
 }
 
@@ -476,6 +487,7 @@ export class ComboViewer {
 
     const bannerParts = infoBannerParts(info);
     this.bannerEl.textContent = bannerParts.length ? bannerParts.join("  |  ") : "RF Card Combination Viewer";
+    ensureBandNumberStyles();
     this.renderBandSummary(collectCardBands(tables));
 
     for (const [label, tblKey] of TAB_DEFINITIONS) {
@@ -569,7 +581,7 @@ export class ComboViewer {
       bands.forEach((canonical, i) => {
         if (i) listEl.appendChild(document.createTextNode(","));
         const token = document.createElement("span");
-        token.className = `cv-band band-c${memoBandIndex(canonical)}`;
+        token.className = `cv-band ${memoBandColorClass(canonical)}`;
         token.textContent = canonical.slice(1); // strip the B/n RAT prefix for display
         listEl.appendChild(token);
       });

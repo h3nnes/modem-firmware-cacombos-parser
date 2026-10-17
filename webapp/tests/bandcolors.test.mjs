@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import {
   PALETTE,
   BAND_COLUMN_HEADERS,
+  BAND_NUMBER_COLORS,
   columnBandPrefix,
   bandSpans,
   bandColor,
+  bandColorClass,
   bandColorFromCell,
+  bandColorIndex,
+  bandNumberOf,
   bandSegments,
   md5IntMod,
 } from "../js/lib/bandcolors.js";
@@ -258,4 +262,52 @@ test("bandColor rejects non-string canonicals like Python (AttributeError)", () 
   for (const bad of [null, undefined, 42, {}]) {
     assert.throws(() => bandColor(bad), TypeError);
   }
+});
+
+// --- static per-band-number colors (BAND_NUMBER_COLORS / bandColorClass) ------------
+
+test("BAND_NUMBER_COLORS spot values match the Kotlin BAND_COLORS map", () => {
+  assert.equal(BAND_NUMBER_COLORS.get(1), "#EE8700");
+  assert.equal(BAND_NUMBER_COLORS.get(3), "#81A83D");
+  assert.equal(BAND_NUMBER_COLORS.get(42), "#85E729");
+  assert.equal(BAND_NUMBER_COLORS.get(78), "#DD0000");
+  assert.equal(BAND_NUMBER_COLORS.get(110), "#BFD7C6");
+  assert.equal(BAND_NUMBER_COLORS.get(127), "#7FFA86");
+  assert.equal(BAND_NUMBER_COLORS.get(257), "#FF8B66");
+  assert.equal(BAND_NUMBER_COLORS.get(263), "#9FAE7B");
+  // The source map genuinely repeats 257's color for 258.
+  assert.equal(BAND_NUMBER_COLORS.get(258), BAND_NUMBER_COLORS.get(257));
+  // Coverage: 1..110, 125..127, 250..263 — 127 entries.
+  assert.equal(BAND_NUMBER_COLORS.size, 127);
+  for (const [num] of BAND_NUMBER_COLORS) {
+    assert.match(BAND_NUMBER_COLORS.get(num), /^#[0-9A-F]{6}$/);
+  }
+});
+
+test("bandNumberOf extracts the band number from a canonical", () => {
+  assert.equal(bandNumberOf("B3"), 3);
+  assert.equal(bandNumberOf("n78"), 78);
+  assert.equal(bandNumberOf("n257"), 257);
+  assert.equal(bandNumberOf("B42"), 42);
+  // Canonicals never carry a class letter; anything unparsable is null.
+  assert.equal(bandNumberOf("B3A"), null);
+  assert.equal(bandNumberOf(""), null);
+  assert.equal(bandNumberOf("x9"), null);
+});
+
+test("bandColorClass: same band number -> same class, LTE or NR alike", () => {
+  assert.equal(bandColorClass("B3"), "band-n3");
+  assert.equal(bandColorClass("n3"), "band-n3");
+  assert.equal(bandColorClass("B78"), "band-n78");
+  assert.equal(bandColorClass("n78"), "band-n78");
+  assert.equal(bandColorClass("n257"), "band-n257");
+});
+
+test("bandColorClass falls back to the md5 palette for uncovered numbers", () => {
+  // Covered ranges are 1..110, 125..127, 250..263 — everything else falls back.
+  for (const canonical of ["n111", "n124", "B150", "n264", "n999"]) {
+    assert.equal(bandColorClass(canonical), `band-c${bandColorIndex(canonical)}`);
+  }
+  // Non-ASCII digits never parse as a number -> md5 fallback too.
+  assert.equal(bandColorClass("B١٢٣"), `band-c${bandColorIndex("B١٢٣")}`);
 });
