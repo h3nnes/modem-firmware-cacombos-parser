@@ -19,6 +19,9 @@ import {
   columnSortKey,
   charCount,
   createRowSearchIndex,
+  BAND_SUMMARY_HEADERS,
+  collectCardBands,
+  compareCanonicalBands,
 } from "../js/viewer.js";
 import { bandColor } from "../js/lib/bandcolors.js";
 
@@ -262,4 +265,63 @@ test("charCount counts code points without allocating (astral plane = 1)", () =>
   assert.equal(charCount("abc"), 3);
   assert.equal(charCount("a\u{10348}b"), 3); // Gothic ahd = 1 code point
   assert.equal(charCount("\u017f\u03bc"), 2); // long s + micro (casefold-diff chars still 1 cp each)
+});
+
+// --- per-card overall band summary (collectCardBands) -------------------------------
+
+test("BAND_SUMMARY_HEADERS are the DL band columns only (UL never contributes)", () => {
+  assert.deepEqual(BAND_SUMMARY_HEADERS, ["LTE DL", "NR DL", "FR1 DL", "FR2 DL"]);
+  assert.ok(BAND_SUMMARY_HEADERS.every((h) => h.endsWith(" DL")));
+});
+
+test("collectCardBands unions DL band columns across all five tables, deduped", () => {
+  const tables = {
+    lte_ca: [{ "LTE DL": "1A + 3A", "LTE UL": "1A" }],
+    nr_sa: [{ "NR DL": "78A" }],
+    nr_ca: [{ "NR DL": "78C + 79D" }],
+    endc: [{ "LTE DL": "3B", "NR DL": "78" }], // "78" repeats n78
+    nrdc: [{ "FR1 DL": "28A", "FR2 DL": "257D" }],
+  };
+  assert.deepEqual(collectCardBands(tables), {
+    lte: ["B1", "B3"],
+    nr: ["n28", "n78", "n79", "n257"],
+  });
+});
+
+test("collectCardBands dedupes by canonical: class letters collapse to one band", () => {
+  const tables = {
+    lte_ca: [{ "LTE DL": "3A + 3C", "LTE UL": "3A" }, { "LTE DL": "3E" }],
+    endc: [{ "LTE DL": "1A", "NR DL": "B3A" }], // prefixed token keeps its own prefix
+  };
+  assert.deepEqual(collectCardBands(tables), { lte: ["B1", "B3"], nr: [] });
+});
+
+test("collectCardBands: plain tokens take the column prefix (LTE -> B, NR/FR -> n)", () => {
+  const tables = {
+    lte_ca: [{ "LTE DL": "3 + 7" }],
+    nr_ca: [{ "NR DL": "78" }],
+    nrdc: [{ "FR1 DL": "28", "FR2 DL": "257" }],
+  };
+  assert.deepEqual(collectCardBands(tables), {
+    lte: ["B3", "B7"],
+    nr: ["n28", "n78", "n257"],
+  });
+});
+
+test("collectCardBands: UL columns never contribute even for bands absent from DL", () => {
+  const tables = { lte_ca: [{ "LTE DL": "1A", "LTE UL": "41A" }], endc: [{ "LTE DL": "2A", "NR DL": "n78", "NR UL": "n79" }] };
+  assert.deepEqual(collectCardBands(tables), { lte: ["B1", "B2"], nr: ["n78"] });
+});
+
+test("compareCanonicalBands: B before n, then numeric (n78 < n257)", () => {
+  assert.ok(compareCanonicalBands("B1", "n1") < 0);
+  assert.ok(compareCanonicalBands("n78", "n257") < 0);
+  assert.ok(compareCanonicalBands("n257", "n78") > 0);
+  assert.equal(compareCanonicalBands("B42", "B42"), 0);
+});
+
+test("collectCardBands: empty or missing tables yield empty lists", () => {
+  assert.deepEqual(collectCardBands({}), { lte: [], nr: [] });
+  assert.deepEqual(collectCardBands(null), { lte: [], nr: [] });
+  assert.deepEqual(collectCardBands({ lte_ca: [], endc: [{}] }), { lte: [], nr: [] });
 });

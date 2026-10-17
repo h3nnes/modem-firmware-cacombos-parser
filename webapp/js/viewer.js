@@ -2,7 +2,8 @@
 // apply-filter with nospace fallback + count label strings, SCS visibility
 // rule, zebra rows, band-token coloring via bandcolors with a memoized color
 // map, header-click sort with ▲/▼ indicators, selection click/ctrl/shift,
-// the three-item copy context menu, per-tab CSV export and the info banner).
+// the three-item copy context menu, per-tab CSV export, the info banner and
+// the per-card overall LTE/NR band summary strip above the tabs).
 // - Cross-card state persistence: the active tab, per-tab column filters/sort
 //   and the global search text survive switching cards (capture on destroy,
 //   prune+restore on construct, reset on Clear).
@@ -217,6 +218,47 @@ export function infoBannerParts(info) {
   return parts;
 }
 
+// --- per-card overall band summary --------------------------------------------------
+
+// DL band columns only: "supported bands" is a DL notion (UL carriers are a
+// DL subset in practice), so UL columns never contribute to the strip.
+export const BAND_SUMMARY_HEADERS = ["LTE DL", "NR DL", "FR1 DL", "FR2 DL"];
+
+const CANONICAL_BAND_RE = /^([Bn])(\p{Nd}+)$/u;
+
+// Numeric-friendly summary order: B bands before n bands, then band number
+// (UI presentation choice, mirrors compare.js's canonicalSortKey).
+export function compareCanonicalBands(a, b) {
+  const ma = CANONICAL_BAND_RE.exec(a);
+  const mb = CANONICAL_BAND_RE.exec(b);
+  if (!ma || !mb) return cmpScalar(a, b); // produced canonicals always match; unknowns stay string-ordered
+  const rat = (m) => (m[1] === "B" ? 0 : 1);
+  return rat(ma) - rat(mb) || pyNdDigits(ma[2]) - pyNdDigits(mb[2]);
+}
+
+// Union of canonical band tokens (deduped, sorted) over every table's DL band
+// columns — the whole card, independent of tab, filters, sort or search.
+// A prefixed token keeps its own prefix ("B7C" in an NR column lands in the
+// LTE list), a plain token takes the column prefix ("78" in "NR DL" -> n78).
+export function collectCardBands(tables) {
+  const lte = new Set();
+  const nr = new Set();
+  for (const [, tblKey] of TAB_DEFINITIONS) {
+    const rows = tables && Array.isArray(tables[tblKey]) ? tables[tblKey] : [];
+    for (const row of rows) {
+      for (const header of BAND_SUMMARY_HEADERS) {
+        const cell = row[header];
+        if (cell === undefined || cell === null) continue;
+        for (const seg of bandSegments(String(cell), header)) {
+          if (seg.canonical === null) continue;
+          (seg.canonical.startsWith("B") ? lte : nr).add(seg.canonical);
+        }
+      }
+    }
+  }
+  return { lte: [...lte].sort(compareCanonicalBands), nr: [...nr].sort(compareCanonicalBands) };
+}
+
 // --- memoized band colors (one color per canonical band) --------------------------
 
 const BAND_COLOR_MEMO = new Map();
@@ -389,6 +431,7 @@ export class ComboViewer {
     root.className = "cv";
     root.innerHTML = `
       <div class="cv-header"></div>
+      <div class="cv-bands" hidden></div>
       <div class="cv-search">
         <label class="cv-search-label" for="cv-search-input">Search:</label>
         <input id="cv-search-input" class="cv-search-entry" type="text" autocomplete="off" spellcheck="false">
@@ -405,6 +448,7 @@ export class ComboViewer {
     `;
     this.root = root;
     this.bannerEl = root.querySelector(".cv-header");
+    this.bandsEl = root.querySelector(".cv-bands");
     this.searchEl = root.querySelector(".cv-search-entry");
     this.clearBtn = root.querySelector(".cv-clear-btn");
     this.scsCheck = root.querySelector(".cv-scs-check");
@@ -422,6 +466,7 @@ export class ComboViewer {
 
     const bannerParts = infoBannerParts(info);
     this.bannerEl.textContent = bannerParts.length ? bannerParts.join("  |  ") : "RF Card Combination Viewer";
+    this.renderBandSummary(collectCardBands(tables));
 
     for (const [label, tblKey] of TAB_DEFINITIONS) {
       const rows = tables && Array.isArray(tables[tblKey]) ? tables[tblKey] : [];
@@ -492,6 +537,28 @@ export class ComboViewer {
       });
       this.tabsEl.appendChild(btn);
     }
+  }
+
+  // One-time per-card strip between the banner and the search row: the overall
+  // supported LTE and NR bands (DL union over all tabs, deduped, sorted),
+  // rendered as the same colored tokens the table cells use. Static card data —
+  // no tab, filter, sort or search interaction; stays hidden for bandless cards.
+  renderBandSummary({ lte, nr }) {
+    if (!lte.length && !nr.length) return;
+    for (const [rat, bands] of [["LTE", lte], ["NR", nr]]) {
+      if (!bands.length) continue;
+      const labelEl = document.createElement("span");
+      labelEl.className = "cv-bands-label";
+      labelEl.textContent = `${rat} bands (${bands.length.toLocaleString("en-US")}):`;
+      this.bandsEl.appendChild(labelEl);
+      for (const canonical of bands) {
+        const token = document.createElement("span");
+        token.className = `cv-band band-c${memoBandIndex(canonical)}`;
+        token.textContent = canonical;
+        this.bandsEl.appendChild(token);
+      }
+    }
+    this.bandsEl.hidden = false;
   }
 
   // Column widths are computed from state.rows (invariant under filtering and

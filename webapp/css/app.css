@@ -412,6 +412,22 @@ body.dragging {
   flex: none;
 }
 
+/* Per-card overall band summary (viewer.js renderBandSummary): one wrapped row
+   of colored tokens per RAT, always expanded. */
+.cv-bands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-size: 13px;
+  flex: none;
+}
+
+.cv-bands-label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .cv-search {
   display: flex;
   align-items: center;
