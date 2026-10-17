@@ -134,7 +134,7 @@ test("main.js card list appends rows incrementally behind delegated listeners", 
 test("arrow-key card navigation + no search auto-focus on card open", async () => {
   const main = await readWebappFile("js", "main.js");
   assert.ok(
-    main.includes("function selectCard(card, { scrollIntoView = false } = {})"),
+    main.includes("function selectCard(card, { reveal = false } = {})"),
     "click and arrows share one selection step",
   );
   assert.ok(
@@ -149,7 +149,11 @@ test("arrow-key card navigation + no search auto-focus on card open", async () =
     main.includes('event.ctrlKey || event.metaKey || event.altKey || event.shiftKey'),
     "modified arrows pass through to browser/OS shortcuts",
   );
-  assert.ok(main.includes('tr.scrollIntoView({ block: "nearest" })'), "navigation scrolls the row into view");
+  assert.ok(main.includes("event.preventDefault();"), "handled arrows never also scroll natively");
+  assert.ok(
+    main.includes("function scrollCardRowIntoView(tr)") && main.includes("pane.scrollTop +="),
+    "navigation scrolls only #cardpane (sticky-header clearance), never outer ancestors",
+  );
   const viewer = await readWebappFile("js", "viewer.js");
   assert.equal(
     viewer.split("this.searchEl.focus()").length - 1,

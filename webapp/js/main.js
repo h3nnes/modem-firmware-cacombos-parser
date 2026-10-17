@@ -375,15 +375,32 @@ els.cardBody.addEventListener("click", (event) => {
 // Shared selection step for click and arrow-key navigation: mark the row
 // selected and open the card. A superseded open cancels the previous parse
 // request (openCard), so rapid arrowing never piles up parses.
-function selectCard(card, { scrollIntoView = false } = {}) {
+function selectCard(card, { reveal = false } = {}) {
   selectedCard = card;
   for (const other of cardRows.values()) other.classList.remove("selected");
   const tr = cardRows.get(card.key);
   if (tr) {
     tr.classList.add("selected");
-    if (scrollIntoView) tr.scrollIntoView({ block: "nearest" });
+    if (reveal) scrollCardRowIntoView(tr);
   }
   openCard(card);
+}
+
+// Brings the selected row into #cardpane's viewport — and into nothing else.
+// scrollIntoView() would also scroll outer scrollable ancestors (the page in
+// stacked layout), and moving up it parks the row at the pane's top edge where
+// the sticky header row overlaps it. Manual rect math scrolls ONLY the card
+// pane and keeps the row clear of the sticky header on both ends.
+function scrollCardRowIntoView(tr) {
+  const pane = els.cardPane;
+  const paneRect = pane.getBoundingClientRect();
+  const rowRect = tr.getBoundingClientRect();
+  const headerH = els.cardHead ? els.cardHead.getBoundingClientRect().height : 0;
+  if (rowRect.top < paneRect.top + headerH) {
+    pane.scrollTop += rowRect.top - (paneRect.top + headerH);
+  } else if (rowRect.bottom > paneRect.bottom) {
+    pane.scrollTop += rowRect.bottom - paneRect.bottom;
+  }
 }
 
 // Arrow-key navigation over the card list (Up = previous card, Down = next),
@@ -391,11 +408,15 @@ function selectCard(card, { scrollIntoView = false } = {}) {
 // OS shortcuts) and typing targets (inputs, textareas, selects, contenteditables)
 // keep their caret movement. With nothing selected, Down starts at the first
 // card and Up at the last; the ends are hard stops (no wrap-around).
+// preventDefault always once the guards pass (boundaries included): the
+// browser's native arrow scrolling would otherwise fire in addition to the
+// selection step — the view runs ahead and the selected card drifts out of view.
 document.addEventListener("keydown", (event) => {
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return;
   if (!cards.length) return;
+  event.preventDefault();
   const index = selectedCard ? cards.findIndex((c) => c.key === selectedCard.key) : -1;
   let next;
   if (index === -1) next = event.key === "ArrowDown" ? 0 : cards.length - 1;
@@ -403,7 +424,7 @@ document.addEventListener("keydown", (event) => {
     next = index + (event.key === "ArrowDown" ? 1 : -1);
     if (next < 0 || next >= cards.length) return;
   }
-  selectCard(cards[next], { scrollIntoView: true });
+  selectCard(cards[next], { reveal: true });
 });
 
 // Reflect the checked set into the listed rows' checkboxes + the compare button
