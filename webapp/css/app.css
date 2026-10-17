@@ -413,14 +413,21 @@ body.dragging {
 }
 
 /* Per-card overall band summary (viewer.js renderBandSummary): one wrapped row
-   of colored tokens per RAT, always expanded. */
+   per bucket (LTE / NSA / SA), always expanded. The token list is inline (not
+   flex-gapped) so the comma-separated tokens sit flush together. */
 .cv-bands {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  flex: none;
+}
+
+.cv-bands-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 8px;
-  font-size: 13px;
-  flex: none;
+  gap: 2px 6px;
 }
 
 .cv-bands-label {

@@ -3,7 +3,7 @@
 // rule, zebra rows, band-token coloring via bandcolors with a memoized color
 // map, header-click sort with ▲/▼ indicators, selection click/ctrl/shift,
 // the three-item copy context menu, per-tab CSV export, the info banner and
-// the per-card overall LTE/NR band summary strip above the tabs).
+// the per-card overall LTE/NSA/SA band summary rows above the tabs).
 // - Cross-card state persistence: the active tab, per-tab column filters/sort
 //   and the global search text survive switching cards (capture on destroy,
 //   prune+restore on construct, reset on Clear).
@@ -220,9 +220,15 @@ export function infoBannerParts(info) {
 
 // --- per-card overall band summary --------------------------------------------------
 
-// DL band columns only: "supported bands" is a DL notion (UL carriers are a
-// DL subset in practice), so UL columns never contribute to the strip.
-export const BAND_SUMMARY_HEADERS = ["LTE DL", "NR DL", "FR1 DL", "FR2 DL"];
+// Which (table, DL band column) pairs feed each summary row. NSA =
+// LTE-anchored EN-DC; SA = NR-CA + single-carrier NR-SA + NR-DC (NR-NR DC has
+// no LTE anchor). UL columns never contribute: "supported bands" is a DL
+// notion.
+export const BAND_SUMMARY_SOURCES = {
+  lte: [["lte_ca", "LTE DL"], ["endc", "LTE DL"]],
+  nsa: [["endc", "NR DL"]],
+  sa: [["nr_ca", "NR DL"], ["nr_sa", "NR DL"], ["nrdc", "FR1 DL"], ["nrdc", "FR2 DL"]],
+};
 
 const CANONICAL_BAND_RE = /^([Bn])(\p{Nd}+)$/u;
 
@@ -236,27 +242,31 @@ export function compareCanonicalBands(a, b) {
   return rat(ma) - rat(mb) || pyNdDigits(ma[2]) - pyNdDigits(mb[2]);
 }
 
-// Union of canonical band tokens (deduped, sorted) over every table's DL band
-// columns — the whole card, independent of tab, filters, sort or search.
-// A prefixed token keeps its own prefix ("B7C" in an NR column lands in the
-// LTE list), a plain token takes the column prefix ("78" in "NR DL" -> n78).
+// Union of canonical band tokens (deduped, sorted) per summary row — the whole
+// card, independent of tab, filters, sort or search. A prefixed token keeps
+// its own prefix ("B7C" in an NR column lands in the LTE row), a plain token
+// takes the column prefix ("78" in "NR DL" -> n78). n-canonicals from the LTE
+// sources are a parser anomaly (no LTE DL cell ever carries one) and are
+// dropped rather than misfiled.
 export function collectCardBands(tables) {
-  const lte = new Set();
-  const nr = new Set();
-  for (const [, tblKey] of TAB_DEFINITIONS) {
-    const rows = tables && Array.isArray(tables[tblKey]) ? tables[tblKey] : [];
-    for (const row of rows) {
-      for (const header of BAND_SUMMARY_HEADERS) {
+  const sets = { lte: new Set(), nsa: new Set(), sa: new Set() };
+  for (const [bucket, sources] of Object.entries(BAND_SUMMARY_SOURCES)) {
+    for (const [tblKey, header] of sources) {
+      const rows = tables && Array.isArray(tables[tblKey]) ? tables[tblKey] : [];
+      for (const row of rows) {
         const cell = row[header];
         if (cell === undefined || cell === null) continue;
         for (const seg of bandSegments(String(cell), header)) {
-          if (seg.canonical === null) continue;
-          (seg.canonical.startsWith("B") ? lte : nr).add(seg.canonical);
+          const canonical = seg.canonical;
+          if (canonical === null) continue;
+          if (canonical.startsWith("B")) sets.lte.add(canonical);
+          else if (bucket !== "lte") sets[bucket].add(canonical);
         }
       }
     }
   }
-  return { lte: [...lte].sort(compareCanonicalBands), nr: [...nr].sort(compareCanonicalBands) };
+  const sorted = (set) => [...set].sort(compareCanonicalBands);
+  return { lte: sorted(sets.lte), nsa: sorted(sets.nsa), sa: sorted(sets.sa) };
 }
 
 // --- memoized band colors (one color per canonical band) --------------------------
@@ -540,23 +550,31 @@ export class ComboViewer {
   }
 
   // One-time per-card strip between the banner and the search row: the overall
-  // supported LTE and NR bands (DL union over all tabs, deduped, sorted),
-  // rendered as the same colored tokens the table cells use. Static card data —
-  // no tab, filter, sort or search interaction; stays hidden for bandless cards.
-  renderBandSummary({ lte, nr }) {
-    if (!lte.length && !nr.length) return;
-    for (const [rat, bands] of [["LTE", lte], ["NR", nr]]) {
+  // supported LTE / NSA / SA bands (DL union per bucket, deduped, sorted), one
+  // row per bucket. Tokens render prefix-stripped and comma-separated without
+  // whitespace (the commas are plain text nodes between inline colored spans —
+  // the color still keys on the full canonical, matching the table cells).
+  // Static card data — no tab, filter, sort or search interaction; empty rows
+  // are skipped and a bandless card keeps the strip hidden.
+  renderBandSummary({ lte, nsa, sa }) {
+    if (!lte.length && !nsa.length && !sa.length) return;
+    for (const [label, bands] of [["LTE", lte], ["NSA", nsa], ["SA", sa]]) {
       if (!bands.length) continue;
+      const row = document.createElement("div");
+      row.className = "cv-bands-row";
       const labelEl = document.createElement("span");
       labelEl.className = "cv-bands-label";
-      labelEl.textContent = `${rat} bands (${bands.length.toLocaleString("en-US")}):`;
-      this.bandsEl.appendChild(labelEl);
-      for (const canonical of bands) {
+      labelEl.textContent = `${label} (${bands.length.toLocaleString("en-US")}):`;
+      const listEl = document.createElement("span");
+      bands.forEach((canonical, i) => {
+        if (i) listEl.appendChild(document.createTextNode(","));
         const token = document.createElement("span");
         token.className = `cv-band band-c${memoBandIndex(canonical)}`;
-        token.textContent = canonical;
-        this.bandsEl.appendChild(token);
-      }
+        token.textContent = canonical.slice(1); // strip the B/n RAT prefix for display
+        listEl.appendChild(token);
+      });
+      row.append(labelEl, listEl);
+      this.bandsEl.appendChild(row);
     }
     this.bandsEl.hidden = false;
   }
