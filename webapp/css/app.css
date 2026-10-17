@@ -19,6 +19,11 @@
 
 * { box-sizing: border-box; }
 
+/* The UA [hidden] rule loses to any author `display` declaration, and several
+   panels below are display:flex while toggled by the hidden attribute — pin
+   the intent so hidden always means hidden. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -38,30 +43,21 @@ body {
   height: 100dvh;
 }
 
-/* --- top bar: import + progress + compare ---------------------------------- */
-
-#topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  flex: none;
-}
+/* --- dropzone (left column head) ------------------------------------------- */
 
 #dropzone {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 12px;
   padding: 10px 16px;
   border: 2px dashed var(--border);
   border-radius: 8px;
   color: var(--muted);
   background: #fafbfc;
-  flex: 1 1 auto;
-  min-width: 0;
   cursor: pointer;
+  flex: none;
 }
 
 #dropzone.drag {
@@ -74,7 +70,10 @@ body {
 
 #pick-btn {
   padding: 4px 12px;
+  margin-left: 4px;
 }
+
+/* --- progress (inside the Loaded files region) ------------------------------ */
 
 #progresswrap {
   display: flex;
@@ -102,25 +101,19 @@ button:disabled {
   cursor: default;
 }
 
-#compare-btn { flex: none; }
-
-#topbar-actions {
-  display: flex;
-  gap: 6px;
-  flex: none;
-}
-
-/* --- loaded-file chips ---------------------------------------------------------- */
+/* --- loaded-file chips (inside the toolbar's right region) ------------------- */
 
 #loadedfiles {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px 8px;
-  padding: 6px 12px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  flex: none;
+  gap: 4px 8px;
+  align-content: flex-start;
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 0 0 0 16px;
+  border-left: 1px solid var(--border);
+  align-self: stretch;
 }
 
 #loadedfiles .loadedfiles-label {
@@ -145,12 +138,12 @@ button:disabled {
 /* --- warnings panel ---------------------------------------------------------- */
 
 #warnings {
-  padding: 6px 12px;
-  background: var(--warn-bg);
-  border-bottom: 1px solid var(--warn-border);
+  padding: 6px 0 2px;
+  background: transparent;
+  border: none;
   max-height: 120px;
   overflow-y: auto;
-  flex: none;
+  flex: 1 1 100%;
 }
 
 #warnings .warning {
@@ -175,7 +168,17 @@ button:disabled {
 #cardpane {
   flex: 0 0 44%;
   min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--panel);
+}
+
+/* The card table scrolls, the dropzone above it does not. A wrapper (instead
+   of #cardpane itself) keeps the sticky thead pinning to the scrolling box. */
+#cards-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -186,12 +189,54 @@ button:disabled {
   touch-action: none;
   background: var(--bg);
   border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
 }
+
+/* --- right column: toolbar + status + viewer -------------------------------- */
+
+#rightcol {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+}
+
+/* Top band: the 3x2 action grid on the left, the Loaded files region on the
+   right of a vertical divider. */
+#toolbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+#actiongrid {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  justify-items: start;
+  gap: 6px 8px;
+  flex: none;
+}
+
+/* The two anchored buttons need a flex wrapper placing the popup / the success
+   tick beside the button; the wrapper keeps the button at its natural width. */
+#export-anchor,
+#import-anchor {
+  display: flex;
+  align-items: center;
+}
+
+/* The export anchor is the popup's positioning context. */
+#export-anchor { position: relative; }
 
 #splitter:hover,
 #splitter.dragging {
   background: var(--accent);
-  border-left-color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* Preview line shown while dragging the splitter; the panes themselves only
@@ -280,22 +325,45 @@ body.dragging {
   white-space: nowrap;
 }
 
-/* --- export bar (Python GUI export row) --------------------------------------------- */
+/* --- export popup (formats + confirm) --------------------------------------- */
 
-#exportbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-  padding: 8px 12px;
+/* The anchor is a plain inline wrapper so the popup can be positioned against
+   the Export ticked button without making it a flex item. */
+#export-anchor { position: relative; }
+
+/* Opens under "Export ticked", overlaying the viewer — never reflows the
+   toolbar. Left-aligned to the anchor so it stays on screen in the right
+   column. */
+#export-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 8px;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
-  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-#exportbar .exportbar-label { font-weight: 600; }
+#export-popup-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+}
 
-#exportbar .exportbar-format {
+#export-formats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#export-popup .export-format {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -303,31 +371,44 @@ body.dragging {
   -webkit-user-select: none;
 }
 
-#exportbar .exportbar-buttons {
+#export-popup-actions {
   display: flex;
   gap: 6px;
-  margin-left: auto;
+  justify-content: flex-end;
+  margin-top: 2px;
 }
 
-#exportbar #export-status { color: #8a6d1a; }
-
-/* "Export ticked" is the bar's primary action: light-blue tint of the
-   selection accent (#0078D7) with dark text, distinct from the plain buttons. */
-#exportbar #export-ticked-btn {
+#export-popup #export-confirm-btn {
   background: #cce4f7;
   border-color: #8fc1e8;
   color: var(--text);
   font-weight: 600;
 }
 
-#exportbar #export-ticked-btn:hover:not(:disabled) {
+#export-popup #export-confirm-btn:hover:not(:disabled) {
+  background: #b9d9f2;
+  border-color: #6fb1e0;
+}
+
+/* --- toolbar action accents -------------------------------------------------- */
+
+/* "Export ticked" is the toolbar's primary action: light-blue tint of the
+   selection accent (#0078D7) with dark text, distinct from the plain buttons. */
+#export-ticked-btn {
+  background: #cce4f7;
+  border-color: #8fc1e8;
+  color: var(--text);
+  font-weight: 600;
+}
+
+#export-ticked-btn:hover:not(:disabled) {
   background: #b9d9f2;
   border-color: #6fb1e0;
 }
 
 /* Disabled stays visually distinct: washed-out blue fill, muted border,
    reduced opacity like the other disabled buttons. */
-#exportbar #export-ticked-btn:disabled {
+#export-ticked-btn:disabled {
   background: #e8f1fa;
   border-color: var(--border);
   color: var(--muted);
@@ -337,21 +418,21 @@ body.dragging {
 /* "Import to parser" pushes one card's DIAG packets to uecaps.hennes.xyz:
    light-red tint of the export accent family, dark text — visually a sibling
    of the light-blue "Export ticked" but clearly a different action. */
-#exportbar #import-parser-btn {
+#import-parser-btn {
   background: #f7d4d4;
   border-color: #e8a8a8;
   color: var(--text);
   font-weight: 600;
 }
 
-#exportbar #import-parser-btn:hover:not(:disabled) {
+#import-parser-btn:hover:not(:disabled) {
   background: #f2bcbc;
   border-color: #dd8f8f;
 }
 
 /* Disabled stays visually distinct: washed-out red fill, muted border,
    reduced opacity like the other disabled buttons. */
-#exportbar #import-parser-btn:disabled {
+#import-parser-btn:disabled {
   background: #f9ecec;
   border-color: var(--border);
   color: var(--muted);
@@ -368,16 +449,26 @@ body.dragging {
   user-select: none;
 }
 
+/* --- status + parser results (below the toolbar, above the viewer) ----------- */
+
+/* Flash-style export status: the old export bar's message, now a slim band
+   under the toolbar. */
+#export-status {
+  padding: 4px 12px;
+  color: #8a6d1a;
+  font-size: 13px;
+  flex: none;
+}
+
 /* Accumulating per-import results: one line per successful import for the
    whole session (the flash-style #export-status would be overwritten by
    other messages). Anchor opens the parser result view; the record name is
-   shown to its right. Cleared by the Clear button, not by selection.
-   No `display` on the region itself so the UA `[hidden]{display:none}` keeps
-   working (flex items are blockified when shown anyway). */
+   shown to its right. Cleared by the Clear button, not by selection. */
 #import-results {
-  flex-basis: 100%;
+  padding: 2px 12px 6px;
   font-size: 12px;
   line-height: 1.6;
+  flex: none;
 }
 #import-results .import-result-line {
   display: block; /* each import on its own line, new ones under the last */
@@ -700,31 +791,12 @@ body.dragging {
 
 /* --- mobile portrait: stacked workbench ---------------------------------------------- */
 
-/* Phones in portrait get one column: dropzone, Clear/Compare row, progress
-   row, then the card pane (capped at 45vh) above the viewer. The splitter is
-   hidden and the stacked helper in main.js clears its leftover inline styles;
-   !important beats any inline width a desktop drag left behind. */
+/* Phones in portrait get one column: dropzone, then the card list (capped at
+   45vh), then the toolbar (action grid + Loaded files), then the viewer. The
+   splitter is hidden and the stacked helper in main.js clears its leftover
+   inline styles; !important beats any inline width a desktop drag left behind. */
 
 @media (max-width: 768px) and (orientation: portrait) {
-  #topbar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  #dropzone {
-    order: 1;
-    flex-wrap: wrap;
-  }
-
-  #topbar-actions { order: 2; }
-
-  #topbar-actions button { flex: 1; }
-
-  #progresswrap { order: 3; }
-
-  #progress { flex: 1; width: auto; }
-
   #app {
     height: auto;
     min-height: 100vh;
@@ -733,12 +805,68 @@ body.dragging {
 
   #workbench { flex-direction: column; }
 
+  /* Reading order in the single column: dropzone/import + card list first
+     (the left column), the action toolbar next, the viewer last. */
+  #rightcol { order: 2; }
+
   #cardpane {
+    order: 1;
     flex: none !important;
     max-height: 45vh;
     min-width: 0;
     width: auto !important;
   }
+
+  #toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  #actiongrid {
+    grid-template-columns: repeat(3, 1fr);
+    width: 100%;
+    justify-items: stretch;
+    position: relative; /* the popup spans the grid here, not the narrow cell */
+  }
+
+  /* Every grid cell fills its column: the plain buttons stretch as grid items,
+     the two anchor wrappers stretch and their inner button fills what the
+     success tick leaves. */
+  #export-anchor,
+  #import-anchor {
+    width: 100%;
+  }
+
+  #export-anchor { position: static; } /* no per-cell anchor: use the grid box */
+
+  #export-anchor > button,
+  #import-anchor > button {
+    flex: 1 1 auto;
+  }
+
+  /* Full-grid popup: on a phone the anchor cell is a third of the width, too
+     narrow to hold the format list without clipping off-screen. */
+  #export-popup {
+    left: 0;
+    right: 0;
+    min-width: 0;
+    max-width: none;
+  }
+
+  /* The Loaded files region drops its vertical divider and indents nothing —
+     it is its own full-width row in the stacked column. */
+  #loadedfiles {
+    flex: none;
+    padding-left: 0;
+    border-left: none;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+
+  #progresswrap { width: 100%; }
+
+  #progress { flex: 1; width: auto; }
 
   #viewerhost {
     flex: 1 1 auto;
@@ -769,9 +897,7 @@ body.dragging {
     padding: 6px 14px;
   }
 
-  #exportbar { gap: 4px 10px; }
-
-  #exportbar .exportbar-format { padding: 6px 2px; }
+  #export-popup .export-format { padding: 6px 2px; }
 
   #loadedfiles .loadedfile-chip { max-width: 60vw; }
 

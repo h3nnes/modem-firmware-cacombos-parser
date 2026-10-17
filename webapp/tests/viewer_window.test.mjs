@@ -131,6 +131,35 @@ test("main.js card list appends rows incrementally behind delegated listeners", 
   assert.ok(source.includes("cardsByKey.set(key, card)"), "row clicks resolve through the key map");
 });
 
+test("main.js export popup: opens from the button, exports from the popup", async () => {
+  const main = await readWebappFile("js", "main.js");
+  assert.ok(main.includes('document.getElementById("export-popup")'), "the popup element is resolved");
+  assert.ok(
+    main.includes('els.exportPopup.querySelectorAll("input[type=checkbox][data-format]")'),
+    "enabled formats are read from the popup",
+  );
+  assert.ok(
+    main.includes("function openExportPopup()") && main.includes("function closeExportPopup()"),
+    "popup open/close helpers exist",
+  );
+  // Nothing ticked must not open the popup (the status line explains why).
+  assert.ok(
+    main.includes('if (!ticked.length) {\n    exportStatus("No cards are ticked — tick at least one card to export.");\n    return;\n  }\n  els.exportPopup.hidden = false;'),
+    "openExportPopup bails loudly with nothing ticked",
+  );
+  assert.ok(main.includes("els.exportConfirmBtn.addEventListener"), "the popup's Export button runs the batch");
+  assert.ok(main.includes("els.exportCancelBtn.addEventListener"), "the popup's Cancel button closes it");
+  assert.ok(!main.includes('els.exportTickedBtn.addEventListener("click", () => exportTicked())'), "the old direct binding is gone");
+  // Escape must not fall through to the viewer's own Escape handler (it would
+  // wipe the search box / column filters just for dismissing the popup).
+  assert.ok(
+    main.includes("event.stopImmediatePropagation();"),
+    "the popup swallows Escape before the viewer's sibling document listener sees it",
+  );
+  // The Loaded files region is always visible now; only the chips come and go.
+  assert.ok(!main.includes("els.loadedFiles.hidden"), "the Loaded files region must not hide when empty");
+});
+
 test("arrow-key card navigation + no search auto-focus on card open", async () => {
   const main = await readWebappFile("js", "main.js");
   assert.ok(
@@ -151,9 +180,12 @@ test("arrow-key card navigation + no search auto-focus on card open", async () =
   );
   assert.ok(main.includes("event.preventDefault();"), "handled arrows never also scroll natively");
   assert.ok(
-    main.includes("function scrollCardRowIntoView(tr)") && main.includes("pane.scrollTop +="),
-    "navigation scrolls only #cardpane (sticky-header clearance), never outer ancestors",
+    main.includes("function scrollCardRowIntoView(tr)") &&
+      main.includes("const pane = els.cardsScroll;") &&
+      main.includes("pane.scrollTop +="),
+    "navigation scrolls only the #cards-scroll wrapper (sticky-header clearance), never outer ancestors",
   );
+  assert.ok(!main.includes("const pane = els.cardPane;"), "the scroller is not the card pane itself");
   const viewer = await readWebappFile("js", "viewer.js");
   assert.equal(
     viewer.split("this.searchEl.focus()").length - 1,

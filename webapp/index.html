@@ -8,65 +8,77 @@
 </head>
 <body>
   <div id="app">
-    <header id="topbar">
-      <div id="dropzone">
-        <strong>Import modem images / RF MBNs</strong>
-        <span>Drop files here or</span>
-        <button id="pick-btn" type="button">browse</button>
-        <input id="file-input" type="file" multiple
-               accept=".img,.mbn,.bin,.tar.md5,.zip,.ipsw,.bbfw,.gz,application/octet-stream" hidden>
-      </div>
-      <div id="progresswrap" hidden>
-        <progress id="progress" value="0" max="1"></progress>
-        <span id="progress-label"></span>
-        <button id="cancel-btn" type="button" hidden>Cancel</button>
-      </div>
-      <span id="topbar-actions">
-        <button id="clear-btn" type="button">Clear</button>
-        <button id="compare-btn" type="button" disabled>Compare selected</button>
-      </span>
-    </header>
-    <div id="loadedfiles" hidden>
-      <span id="loadedfiles-label" class="loadedfiles-label">Loaded files:</span>
-      <span id="loadedfiles-chips"></span>
-    </div>
-    <div id="warnings" hidden></div>
-    <div id="exportbar">
-      <span class="exportbar-label">Export formats:</span>
-      <label class="exportbar-format"><input type="checkbox" data-format="mbn"> MBN (.mbn)</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="json"> JSON</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="csv"> CSV</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="webcsv"> Web CSV</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="b0cd" checked> 0xB0CD (LTE)</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="b826" checked> 0xB826 (NR)</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="mtk_nr"> MTK NR Trace</label>
-      <label class="exportbar-format"><input type="checkbox" data-format="mtk_lte"> LTE CA_COMB_INFO</label>
-      <span class="exportbar-buttons">
-        <button id="select-all-btn" type="button">Select all</button>
-        <button id="deselect-all-btn" type="button">Deselect all</button>
-        <button id="export-ticked-btn" type="button">Export ticked</button>
-        <button id="import-parser-btn" type="button">Import to parser</button>
-        <span id="import-done-tick" hidden>✓</span>
-      </span>
-      <span id="export-status" hidden></span>
-      <span id="import-results" hidden></span>
-    </div>
     <main id="workbench">
       <aside id="cardpane">
-        <table id="cardlist">
-          <thead>
-            <tr id="cardlist-head">
-              <th></th><th>Name</th><th>HWID_FSID_BID</th><th>Format</th>
-              <th>LTE combos</th><th>NR combos</th>
-            </tr>
-          </thead>
-          <tbody id="cardlist-body"></tbody>
-        </table>
-        <p id="cards-empty">No imports yet.</p>
+        <div id="dropzone">
+          <strong>Import modem images / RF MBNs</strong>
+          <span>Drop files here or</span>
+          <button id="pick-btn" type="button">browse</button>
+          <input id="file-input" type="file" multiple
+                 accept=".img,.mbn,.bin,.tar.md5,.zip,.ipsw,.bbfw,.gz,application/octet-stream" hidden>
+        </div>
+        <div id="cards-scroll">
+          <table id="cardlist">
+            <thead>
+              <tr id="cardlist-head">
+                <th></th><th>Name</th><th>HWID_FSID_BID</th><th>Format</th>
+                <th>LTE combos</th><th>NR combos</th>
+              </tr>
+            </thead>
+            <tbody id="cardlist-body"></tbody>
+          </table>
+          <p id="cards-empty">No imports yet.</p>
+        </div>
       </aside>
       <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize card list" tabindex="0"></div>
-      <section id="viewerhost">
-        <div id="viewer-placeholder">Import a modem image or RF MBN, then click a card to view its combinations.</div>
+      <section id="rightcol">
+        <div id="toolbar">
+          <div id="actiongrid">
+            <button id="select-all-btn" type="button">Select all</button>
+            <span id="export-anchor">
+              <button id="export-ticked-btn" type="button" aria-haspopup="dialog" aria-expanded="false">Export ticked</button>
+              <div id="export-popup" role="dialog" aria-label="Export formats" hidden>
+                <div id="export-popup-title">Export formats</div>
+                <div id="export-formats">
+                  <label class="export-format"><input type="checkbox" data-format="mbn"> MBN (.mbn)</label>
+                  <label class="export-format"><input type="checkbox" data-format="json"> JSON</label>
+                  <label class="export-format"><input type="checkbox" data-format="csv"> CSV</label>
+                  <label class="export-format"><input type="checkbox" data-format="webcsv"> Web CSV</label>
+                  <label class="export-format"><input type="checkbox" data-format="b0cd" checked> 0xB0CD (LTE)</label>
+                  <label class="export-format"><input type="checkbox" data-format="b826" checked> 0xB826 (NR)</label>
+                  <label class="export-format"><input type="checkbox" data-format="mtk_nr"> MTK NR Trace</label>
+                  <label class="export-format"><input type="checkbox" data-format="mtk_lte"> LTE CA_COMB_INFO</label>
+                </div>
+                <div id="export-popup-actions">
+                  <button id="export-confirm-btn" type="button">Export</button>
+                  <button id="export-cancel-btn" type="button">Cancel</button>
+                </div>
+              </div>
+            </span>
+            <button id="compare-btn" type="button" disabled>Compare selected</button>
+            <button id="deselect-all-btn" type="button">Deselect all</button>
+            <span id="import-anchor">
+              <button id="import-parser-btn" type="button">Import to parser</button>
+              <span id="import-done-tick" hidden>✓</span>
+            </span>
+            <button id="clear-btn" type="button">Clear</button>
+          </div>
+          <div id="loadedfiles">
+            <span id="loadedfiles-label" class="loadedfiles-label">Loaded files:</span>
+            <span id="loadedfiles-chips"></span>
+            <div id="progresswrap" hidden>
+              <progress id="progress" value="0" max="1"></progress>
+              <span id="progress-label"></span>
+              <button id="cancel-btn" type="button" hidden>Cancel</button>
+            </div>
+            <div id="warnings" hidden></div>
+          </div>
+        </div>
+        <span id="export-status" hidden></span>
+        <span id="import-results" hidden></span>
+        <section id="viewerhost">
+          <div id="viewer-placeholder">Import a modem image or RF MBN, then click a card to view its combinations.</div>
+        </section>
       </section>
       <div id="splitter-ghost" hidden></div>
     </main>

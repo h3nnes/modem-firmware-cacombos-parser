@@ -1,6 +1,6 @@
 // Unit tests for the stacked (mobile portrait) workbench layout: the pure
 // stacked-state helpers in webapp/js/splitter.js, plus source-level pins for
-// the top-bar restructure in index.html and the portrait media query in
+// the two-column shell in index.html and the portrait media query in
 // css/app.css (the suite runs DOM-free under node --test, and main.js's
 // browser-only wiring is not importable here).
 import { test } from "node:test";
@@ -125,40 +125,93 @@ test("applyStackedState(false) tolerates a missing applyWidth callback", () => {
   assert.equal(body.classList.contains("stacked"), false);
 });
 
-// --- index.html: top-bar restructure -------------------------------------------------
+// --- index.html: two-column shell ---------------------------------------------------
 
-async function readTopbar() {
-  const html = await readWebappFile("index.html");
-  const start = html.indexOf('<header id="topbar">');
-  assert.notEqual(start, -1, "topbar header missing");
-  const end = html.indexOf("</header>", start);
-  return html.slice(start, end);
+async function readHtml() {
+  return readWebappFile("index.html");
 }
 
-test("topbar: clear-btn moved into #topbar-actions next to compare-btn, out of the dropzone", async () => {
-  const topbar = await readTopbar();
-  const dropzoneStart = topbar.indexOf('<div id="dropzone">');
-  assert.notEqual(dropzoneStart, -1);
-  const dropzone = topbar.slice(dropzoneStart, topbar.indexOf("</div>", dropzoneStart));
-  const actionsStart = topbar.indexOf('<span id="topbar-actions">');
-  assert.notEqual(actionsStart, -1, "topbar-actions span missing");
-  const actions = topbar.slice(actionsStart, topbar.indexOf("</span>", actionsStart));
-  assert.ok(actions.includes('id="clear-btn"'), "clear-btn must live in topbar-actions");
-  assert.ok(actions.includes('id="compare-btn"'), "compare-btn must live in topbar-actions");
-  assert.ok(!dropzone.includes('id="clear-btn"'), "clear-btn must leave the dropzone");
-  assert.ok(dropzone.includes('id="pick-btn"'), "pick-btn stays in the dropzone");
-  assert.ok(dropzone.includes('id="file-input"'), "file-input stays in the dropzone");
+test("shell: dropzone lives inside #cardpane, above the card list", async () => {
+  const html = await readHtml();
+  const paneStart = html.indexOf('<aside id="cardpane">');
+  assert.notEqual(paneStart, -1, "cardpane missing");
+  const pane = html.slice(paneStart, html.indexOf("</aside>", paneStart));
+  const dropzoneIdx = pane.indexOf('<div id="dropzone">');
+  const scrollIdx = pane.indexOf('<div id="cards-scroll">');
+  const listIdx = pane.indexOf('<table id="cardlist">');
+  assert.notEqual(dropzoneIdx, -1, "dropzone must move into the left column");
+  assert.notEqual(scrollIdx, -1, "the card list needs its own scroll wrapper");
+  assert.ok(dropzoneIdx < scrollIdx && scrollIdx < listIdx, "dropzone, then the scrolling card list");
+  assert.ok(pane.includes('id="pick-btn"'), "pick-btn stays in the dropzone");
+  assert.ok(pane.includes('id="file-input"'), "file-input stays in the dropzone");
 });
 
-test("topbar DOM order: dropzone, progresswrap, topbar-actions", async () => {
-  const topbar = await readTopbar();
-  const dropzoneIdx = topbar.indexOf('id="dropzone"');
-  const progressIdx = topbar.indexOf('id="progresswrap"');
-  const actionsIdx = topbar.indexOf('id="topbar-actions"');
-  assert.ok(dropzoneIdx !== -1 && progressIdx !== -1 && actionsIdx !== -1);
-  assert.ok(dropzoneIdx < progressIdx, "dropzone must come before progresswrap");
-  assert.ok(progressIdx < actionsIdx, "progresswrap must come before topbar-actions");
+test("shell: 3x2 action grid holds the six buttons in the spec order", async () => {
+  const html = await readHtml();
+  const start = html.indexOf('<div id="actiongrid">');
+  assert.notEqual(start, -1, "actiongrid missing");
+  // Order per the mock: Select all | Export ticked | Compare selected /
+  // Deselect all | Import to parser | Clear.
+  const order = ["select-all-btn", "export-ticked-btn", "compare-btn", "deselect-all-btn", "import-parser-btn", "clear-btn"];
+  let last = -1;
+  for (const id of order) {
+    const idx = html.indexOf(`id="${id}"`, start);
+    assert.notEqual(idx, -1, `${id} missing from the toolbar`);
+    assert.ok(idx > last, `${id} is out of order in the action grid`);
+    last = idx;
+  }
 });
+
+test("shell: Loaded files region sits right of the grid, inside #toolbar", async () => {
+  const html = await readHtml();
+  const tbStart = html.indexOf('<div id="toolbar">');
+  assert.notEqual(tbStart, -1, "toolbar missing");
+  const toolbar = html.slice(tbStart, html.indexOf('<section id="viewerhost">', tbStart));
+  const gridIdx = toolbar.indexOf('<div id="actiongrid">');
+  const loadedIdx = toolbar.indexOf('<div id="loadedfiles">');
+  assert.ok(gridIdx !== -1 && loadedIdx !== -1, "both toolbar regions must exist");
+  assert.ok(gridIdx < loadedIdx, "the action grid comes first, Loaded files to its right");
+  assert.ok(toolbar.indexOf('id="progresswrap"', loadedIdx) > loadedIdx, "progress lives in the Loaded files region");
+  assert.ok(toolbar.indexOf('id="warnings"', loadedIdx) > loadedIdx, "warnings live in the Loaded files region");
+  assert.ok(toolbar.includes('id="loadedfiles-label"'), "the label is part of the region");
+});
+
+test("shell: export formats moved into a popup anchored to Export ticked", async () => {
+  const html = await readHtml();
+  assert.ok(!html.includes('id="exportbar"'), "the flat export bar is gone");
+  const anchorStart = html.indexOf('<span id="export-anchor">');
+  assert.notEqual(anchorStart, -1, "export-anchor missing");
+  const anchor = html.slice(anchorStart, html.indexOf("</span>", html.indexOf('id="export-popup-actions"', anchorStart)));
+  assert.ok(anchor.includes('id="export-ticked-btn"'), "the trigger button anchors the popup");
+  assert.ok(anchor.includes('aria-expanded="false"') && anchor.includes('aria-haspopup="dialog"'), "the trigger is a labelled popup opener");
+  assert.ok(anchor.includes('role="dialog"') && anchor.includes('aria-label="Export formats"'), "the popup is a labelled dialog");
+  assert.ok(anchor.includes('id="export-popup"') && anchor.includes("hidden"), "the popup starts hidden");
+  for (const format of ["mbn", "json", "csv", "webcsv", "b0cd", "b826", "mtk_nr", "mtk_lte"]) {
+    assert.ok(anchor.includes(`data-format="${format}"`), `format ${format} must live in the popup`);
+  }
+  assert.ok(anchor.includes('id="export-confirm-btn"') && anchor.includes('id="export-cancel-btn"'), "Export/Cancel actions");
+});
+
+test("shell: status + parser results sit under the toolbar, above the viewer", async () => {
+  const html = await readHtml();
+  const statusIdx = html.indexOf('id="export-status"');
+  const resultsIdx = html.indexOf('id="import-results"');
+  const viewerIdx = html.indexOf('<section id="viewerhost">');
+  assert.notEqual(statusIdx, -1, "export-status missing");
+  assert.notEqual(resultsIdx, -1, "import-results missing");
+  // The toolbar's REAL close tag is the last one before the status band (the
+  // first </div> after <div id="toolbar"> closes #export-popup-title inside the
+  // popup, so a forward scan would make the assertion vacuous).
+  const toolbarEnd = html.lastIndexOf("</div>", statusIdx);
+  assert.notEqual(toolbarEnd, -1, "toolbar close not found before the status band");
+  assert.ok(toolbarEnd < statusIdx, "status sits AFTER the toolbar");
+  assert.ok(statusIdx < resultsIdx && resultsIdx < viewerIdx, "results follow the status, still above the viewer");
+  assert.ok(
+    html.indexOf('id="export-status"') > html.indexOf('<div id="toolbar">'),
+    "status must not be hoisted above the toolbar",
+  );
+});
+
 
 // --- css/app.css: portrait media query -----------------------------------------------
 
@@ -175,14 +228,26 @@ function ruleInside(block, selector) {
   return block.slice(start, block.indexOf("}", start));
 }
 
-test("app.css: desktop gains the #topbar-actions row and #app gains 100dvh", async () => {
+test("app.css: desktop shell lays out the toolbar grid + loaded-files divider", async () => {
   const css = await readWebappFile("css", "app.css");
   const mqStart = css.indexOf(`@media ${STACKED_MEDIA_QUERY}`);
   const desktop = css.slice(0, mqStart);
-  const actionsIdx = desktop.indexOf("#topbar-actions");
-  assert.notEqual(actionsIdx, -1, "desktop #topbar-actions rule missing");
-  const actionsRule = desktop.slice(actionsIdx, desktop.indexOf("}", actionsIdx));
-  assert.ok(actionsRule.includes("display: flex"), "topbar-actions renders as a button row on desktop");
+
+  const gridIdx = desktop.indexOf("#actiongrid {");
+  assert.notEqual(gridIdx, -1, "desktop #actiongrid rule missing");
+  const gridRule = desktop.slice(gridIdx, desktop.indexOf("}", gridIdx));
+  assert.ok(gridRule.includes("display: grid"), "the actions render as a grid");
+  assert.ok(gridRule.includes("repeat(3,"), "three columns for the 3x2 block");
+
+  const loadedIdx = desktop.indexOf("#loadedfiles {");
+  assert.notEqual(loadedIdx, -1, "desktop #loadedfiles rule missing");
+  const loadedRule = desktop.slice(loadedIdx, desktop.indexOf("}", loadedIdx));
+  assert.ok(loadedRule.includes("border-left: 1px solid"), "the vertical divider separates grid from Loaded files");
+
+  const popupIdx = desktop.indexOf("#export-popup {");
+  assert.notEqual(popupIdx, -1, "desktop #export-popup rule missing");
+  const popupRule = desktop.slice(popupIdx, desktop.indexOf("}", popupIdx));
+  assert.ok(popupRule.includes("position: absolute"), "the popup floats above the viewer, not in flow");
 
   const appIdx = desktop.indexOf("#app {");
   assert.notEqual(appIdx, -1);
@@ -197,6 +262,8 @@ test("app.css: desktop gains the #topbar-actions row and #app gains 100dvh", asy
 test("app.css portrait query: stacked workbench, hidden splitter, capped card pane", async () => {
   const block = await readMediaQueryBlock();
   assert.ok(ruleInside(block, "#workbench {").includes("flex-direction: column"));
+  assert.ok(ruleInside(block, "#cardpane {").includes("order: 1"), "import + card list first in the single column");
+  assert.ok(ruleInside(block, "#rightcol {").includes("order: 2"), "toolbar + viewer follow");
 
   assert.ok(ruleInside(block, "#splitter {").includes("display: none"));
 
@@ -209,7 +276,7 @@ test("app.css portrait query: stacked workbench, hidden splitter, capped card pa
   assert.ok(viewerRule.includes("min-height: 75vh"), "combo view must be at least 75vh tall in portrait");
   assert.ok(viewerRule.includes("overflow: visible"), "#viewerhost must not scroll internally in portrait");
 
-  assert.ok(ruleInside(block, "#topbar {").includes("flex-direction: column"));
+  assert.ok(ruleInside(block, "#toolbar {").includes("flex-direction: column"));
 });
 
 test("portrait: #app switches to page-scroll sizing (height auto, min-height dvh)", async () => {
@@ -234,11 +301,11 @@ test("portrait: table rows stay page-flowed, wide tables pan inside the wrap", a
     ".compare must not scroll internally in portrait");
 });
 
-test("portrait: #cardpane keeps its 45vh internal scroll", async () => {
+test("portrait: #cardpane keeps its 45vh cap while the scroller is the list wrapper", async () => {
   const block = await readMediaQueryBlock();
   const cardRule = ruleInside(block, "#cardpane {");
   assert.ok(cardRule.includes("max-height: 45vh"), "card list keeps its cap");
-  assert.ok(!cardRule.includes("overflow"), "#cardpane keeps its base overflow:auto");
+  assert.ok(!cardRule.includes("overflow:"), "#cardpane itself no longer scrolls (the wrapper does)");
 });
 
 test("app.css portrait query: progress bar flexes and touch polish lands", async () => {
@@ -250,7 +317,8 @@ test("app.css portrait query: progress bar flexes and touch polish lands", async
 
   assert.ok(ruleInside(block, ".cv-search-entry {").includes("min(260px, 100%)"));
 
-  // "button {" must not match "#topbar-actions button {": require it at line start.
+  // "button {" must not match a descendant rule like "#actiongrid button {":
+  // require it at line start.
   const buttonMatch = block.match(/(?:^|\n)\s*button\s*\{/);
   assert.notEqual(buttonMatch, null, "touch-target button rule missing");
   const buttonRule = block.slice(buttonMatch.index, block.indexOf("}", buttonMatch.index));

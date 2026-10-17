@@ -50,7 +50,6 @@ const els = {
   cancelBtn: document.getElementById("cancel-btn"),
   compareBtn: document.getElementById("compare-btn"),
   warnings: document.getElementById("warnings"),
-  loadedFiles: document.getElementById("loadedfiles"),
   loadedFilesLabel: document.getElementById("loadedfiles-label"),
   loadedFilesChips: document.getElementById("loadedfiles-chips"),
   cardBody: document.getElementById("cardlist-body"),
@@ -60,9 +59,12 @@ const els = {
   viewerPlaceholder: document.getElementById("viewer-placeholder"),
   workbench: document.getElementById("workbench"),
   cardPane: document.getElementById("cardpane"),
+  cardsScroll: document.getElementById("cards-scroll"),
   splitter: document.getElementById("splitter"),
   splitterGhost: document.getElementById("splitter-ghost"),
-  exportbar: document.getElementById("exportbar"),
+  exportPopup: document.getElementById("export-popup"),
+  exportConfirmBtn: document.getElementById("export-confirm-btn"),
+  exportCancelBtn: document.getElementById("export-cancel-btn"),
   selectAllBtn: document.getElementById("select-all-btn"),
   deselectAllBtn: document.getElementById("deselect-all-btn"),
   exportTickedBtn: document.getElementById("export-ticked-btn"),
@@ -107,7 +109,7 @@ const pendingReplies = new Map();
 const exportWaiters = new Map();
 let exporting = false; // batch export in flight (blocks re-entry)
 let progressHideTimer = null; // post-completion hide timer (Rec-2)
-let exportStatusTimer = null; // export bar flash hide timer
+let exportStatusTimer = null; // toolbar status flash hide timer
 
 // --- helpers ---------------------------------------------------------------------
 
@@ -177,9 +179,8 @@ function exportStatus(message, { sticky = false } = {}) {
 
 function renderLoadedFiles() {
   els.loadedFilesChips.replaceChildren();
-  els.loadedFiles.hidden = loadedFiles.length === 0;
-  if (!loadedFiles.length) return;
-  // Count when >1: "Loaded files (3):" — muted like the other bar labels.
+  // The region itself is always visible ("Loaded files:" is a fixed toolbar
+  // label in the new shell); only the chips come and go.
   els.loadedFilesLabel.textContent =
     loadedFiles.length > 1 ? `Loaded files (${loadedFiles.length}):` : "Loaded files:";
   for (const name of loadedFiles) {
@@ -386,13 +387,14 @@ function selectCard(card, { reveal = false } = {}) {
   openCard(card);
 }
 
-// Brings the selected row into #cardpane's viewport — and into nothing else.
-// scrollIntoView() would also scroll outer scrollable ancestors (the page in
-// stacked layout), and moving up it parks the row at the pane's top edge where
-// the sticky header row overlaps it. Manual rect math scrolls ONLY the card
-// pane and keeps the row clear of the sticky header on both ends.
+// Brings the selected row into #cards-scroll's viewport — and into nothing
+// else. scrollIntoView() would also scroll outer scrollable ancestors (the
+// page in stacked layout), and moving up it parks the row at the scrolling
+// box's top edge where the sticky header row overlaps it. Manual rect math
+// scrolls ONLY the card list's scroller and keeps the row clear of the sticky
+// header on both ends.
 function scrollCardRowIntoView(tr) {
-  const pane = els.cardPane;
+  const pane = els.cardsScroll;
   const paneRect = pane.getBoundingClientRect();
   const rowRect = tr.getBoundingClientRect();
   const headerH = els.cardHead ? els.cardHead.getBoundingClientRect().height : 0;
@@ -415,6 +417,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (!els.exportPopup.hidden) return; // the export popup owns the viewport while open
   if (!cards.length) return;
   event.preventDefault();
   const index = selectedCard ? cards.findIndex((c) => c.key === selectedCard.key) : -1;
@@ -452,8 +455,8 @@ function renderViewer(card, tables) {
   destroyViewer();
   const record = card.record;
   const identity = recordIdentity(record.name);
-  // Exports live in the export bar above the workbench;
-  // the per-card header buttons were superseded by "Export ticked".
+  // Exports run from the toolbar's "Export ticked" popup; the per-card header
+  // buttons were superseded by it.
   const head = document.createElement("div");
   head.className = "card-detail";
   const title = document.createElement("span");
@@ -554,7 +557,7 @@ function renderCompare(entries) {
 // --- batch export (ticked cards x enabled formats) ------------------------------
 
 function enabledFormats() {
-  return [...els.exportbar.querySelectorAll("input[type=checkbox][data-format]")]
+  return [...els.exportPopup.querySelectorAll("input[type=checkbox][data-format]")]
     .filter((cb) => cb.checked)
     .map((cb) => cb.dataset.format);
 }
@@ -661,6 +664,60 @@ async function exportTicked() {
     els.clearBtn.disabled = false;
   }
 }
+
+// --- export format popup -------------------------------------------------------------
+
+// The format checkboxes now live in a popup under "Export ticked": clicking the
+// button opens it (but only when at least one card is ticked — otherwise there
+// is nothing to export and the status line says so), clicking Export runs the
+// batch, Cancel/Escape/outside-click closes it. The ticked formats persist for
+// the session (the checkboxes are never re-rendered).
+function openExportPopup() {
+  const ticked = cards.filter((c) => checked.has(c.key));
+  if (!ticked.length) {
+    exportStatus("No cards are ticked — tick at least one card to export.");
+    return;
+  }
+  els.exportPopup.hidden = false;
+  els.exportTickedBtn.setAttribute("aria-expanded", "true");
+}
+
+function closeExportPopup() {
+  els.exportPopup.hidden = true;
+  els.exportTickedBtn.setAttribute("aria-expanded", "false");
+}
+
+els.exportTickedBtn.addEventListener("click", (event) => {
+  event.stopPropagation(); // the document click-outside listener must not re-close it
+  if (els.exportPopup.hidden) openExportPopup();
+  else closeExportPopup();
+});
+
+els.exportConfirmBtn.addEventListener("click", () => {
+  closeExportPopup();
+  exportTicked();
+});
+
+els.exportCancelBtn.addEventListener("click", () => closeExportPopup());
+
+// Click outside the popup (and not on its anchor) closes it.
+document.addEventListener("click", (event) => {
+  if (els.exportPopup.hidden) return;
+  if (event.target instanceof Element && event.target.closest("#export-anchor")) return;
+  closeExportPopup();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.exportPopup.hidden) {
+    // stopImmediatePropagation, not stopPropagation: the viewer's own Escape
+    // handler is a sibling listener on document and would otherwise also run,
+    // wiping the user's search box / column filters just because they dismissed
+    // the export popup. main.js registers this listener at load, before any
+    // ComboViewer exists, so it runs first and can swallow the event.
+    event.stopImmediatePropagation();
+    closeExportPopup();
+  }
+});
 
 // --- import to parser (uecaps.hennes.xyz) -------------------------------------------
 
@@ -958,7 +1015,7 @@ els.deselectAllBtn.addEventListener("click", () => {
   checked.clear();
   syncChecks();
 });
-els.exportTickedBtn.addEventListener("click", () => exportTicked());
+// (Export ticked opens the format popup — see the popup section above.)
 
 for (const eventName of ["dragenter", "dragover"]) {
   els.dropzone.addEventListener(eventName, (event) => {
