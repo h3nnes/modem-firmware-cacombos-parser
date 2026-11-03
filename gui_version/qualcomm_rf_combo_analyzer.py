@@ -9,7 +9,8 @@ This module contains all non-GUI work used by ``qualcomm_rf_combo_gui.py``:
 * writing MBN, JSON, CSV, 0xB0CD, and 0xB826 exports; and
 * comparing multiple RF-card MBNs.
 
-This revision consumes dynamically selected native-aligned and later-generated band-group fields from legacy parser v1.7.0.
+This revision adds Magnus inline-150 legacy tables, UBI/UBIFS container input,
+and dynamically selected native-aligned/later-generated band-group fields.
 
 Keep this file beside ``legacy_rf_parser.py`` and
 ``modern_rfcard_parser.py``.
@@ -39,7 +40,7 @@ import new_rfcard_parser as modern
 # the legacy implementation directly.
 ParseError = legacy.ParseError
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 MODERN_RE = re.compile(
     r"^rf_config_(?P<hwid>\d+)_(?P<fsid>\d+)_(?P<bid>\d+)"
     r"(?:_(?P<rev>\d+))?\.mbn$",
@@ -136,6 +137,16 @@ def _matches_candidate(name: str) -> tuple[str, re.Match[str]] | None:
     return None
 
 
+def _is_so_path(path: str) -> bool:
+    """Return whether a firmware path contains an ``so`` directory.
+
+    FAT paths use forward slashes while files extracted on Windows use
+    backslashes, so normalize both before applying the legacy RF-card filter.
+    """
+    normalized = path.replace("\\", "/").casefold()
+    return "/so/" in f"/{normalized.strip('/')}"
+
+
 def _walk_fat(
     fat: legacy.Fat16Image,
     directory_cluster: int | None = None,
@@ -221,7 +232,7 @@ def scan_source(path: Path) -> list[ModuleRecord]:
         generation, match = match_info
         # Numeric legacy modules are meaningful under the modem's /so tree.
         # This prevents unrelated numeric MCFG files from appearing as RF cards.
-        if generation == "Legacy ELF" and "/so/" not in inner_path.casefold():
+        if generation == "Legacy ELF" and not _is_so_path(inner_path):
             continue
         raw = fat._read_clusters(entry.first_cluster)[: entry.size]
         digest = hashlib.sha256(raw).hexdigest()
@@ -1578,6 +1589,12 @@ def _combo_counts(
                     return lte, "0+0+0=0"
                 raise
             labeled = _legacy_table_labels(blob, descriptors)
+
+            lte += sum(
+                descriptor.combo_count
+                for table, descriptor, _note in labeled
+                if table == "lte_ca"
+            )
 
             endc = sum(
                 descriptor.combo_count

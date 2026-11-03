@@ -1,0 +1,2 @@
+# UBI/UBIFS container extraction used by gui_version/image_extractor.py.
+ubi-reader>=0.8.14,<0.9

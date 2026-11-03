@@ -4,8 +4,9 @@
 This module re-implements the recursive detection and extraction logic from
 ``qcom-rfcard-mbn-parser-fork/extract_rfcards.py`` in a form suitable for the
 upstream ``qualcomm_rf_combo_analyzer`` data model.  It discovers
-``rf_config_<HWID>_<FSID>_<BID>.mbn`` files inside Android modem firmware
-containers (sparse, payload, super, ext4, EROFS, squashfs, F2FS, UBI, FAT,
+``rf_config_<HWID>_<FSID>_<BID>.mbn`` files and legacy ``so/*.mbn`` RF cards
+inside Android modem firmware containers (sparse, payload, super, ext4,
+EROFS, squashfs, F2FS, UBI/UBIFS, FAT,
 gzip/xz/zstd/zip/tar/7z, etc.) and returns the paths of any matching MBNs plus
 co-located sidecar files.
 
@@ -35,12 +36,13 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 RFCARD_PATTERN = re.compile(
-    r"^(?:"
     r"rf_config_[0-9A-Fa-f]{3,6}_[0-9A-Fa-f]{1,4}_[0-9A-Fa-f]{1,4}"
     r"(?:_(?P<rev>\d+))?"
-    r"|[0-9A-Fa-f]+_[0-9A-Fa-f]+(?:_[0-9A-Fa-f]+)?"
-    r")\.mbn$",
+    r"\.mbn$",
     re.IGNORECASE,
+)
+LEGACY_RFCARD_PATTERN = re.compile(
+    r"^[0-9A-Fa-f]{1,6}_[0-9A-Fa-f]{1,4}(?:_[0-9A-Fa-f]{1,4})?\.mbn$"
 )
 
 # Files that add context around an rf_config MBN (kept when present in the same
@@ -485,12 +487,123 @@ def extract_f2fs(path: Path, ctx: ExtractContext) -> Path | None:  # noqa: ARG00
     return None
 
 
-def extract_ubi(path: Path, ctx: ExtractContext) -> Path | None:  # noqa: ARG001
-    logger.warning(
-        "%s looks like a UBI image; UBI extraction is not supported by this tool",
-        path.name,
+def _safe_output_component(value: object, fallback: str) -> str:
+    """Return one filesystem-safe component for UBI image/volume names."""
+    component = Path(str(value)).name
+    component = re.sub(r"[^0-9A-Za-z_.-]+", "_", component).strip("._")
+    return component or fallback
+
+
+def _extract_ubi_with_python(path: Path, out: Path) -> bool:
+    """Extract UBI/UBIFS using the Python ``ubi-reader`` package.
+
+    Imports stay local so every non-UBI workflow continues to be stdlib-only.
+    Calling the library directly also works in a bundled GUI where its console
+    entry-point executable is not present.
+    """
+    try:
+        from ubireader.ubi import ubi
+        from ubireader.ubi_io import leb_virtual_file, ubi_file
+        from ubireader.ubifs import ubifs
+        from ubireader.ubifs.output import extract_files
+        from ubireader.utils import guess_peb_size
+    except ImportError:
+        return False
+
+    ufile = None
+    try:
+        peb_size = guess_peb_size(str(path))
+        if not peb_size:
+            raise ExtractionError(f"Could not determine UBI PEB size for {path.name}")
+
+        ufile = ubi_file(str(path), peb_size, 0, None)
+        ubi_obj = ubi(ufile)
+        extracted_volumes = 0
+        for image_index, image in enumerate(ubi_obj.images):
+            image_name = _safe_output_component(
+                getattr(image, "image_seq", image_index),
+                f"image_{image_index}",
+            )
+            for volume_index, volume_name in enumerate(image.volumes):
+                volume = image.volumes[volume_name]
+                volume_blocks = volume.get_blocks(ubi_obj.blocks)
+                if not volume_blocks:
+                    continue
+
+                target = out / image_name / _safe_output_component(
+                    volume_name,
+                    f"volume_{volume_index}",
+                )
+                target.mkdir(parents=True, exist_ok=True)
+                try:
+                    leb_file = leb_virtual_file(ubi_obj, volume_blocks)
+                    ubifs_obj = ubifs(leb_file)
+                    extract_files(ubifs_obj, str(target), False)
+                except (Exception, SystemExit) as exc:
+                    # A UBI image may mix UBIFS and raw/static volumes.  Keep
+                    # scanning other volumes when one is not a filesystem.
+                    logger.warning(
+                        "Skipping non-UBIFS or unreadable UBI volume %r: %s",
+                        volume_name,
+                        exc,
+                    )
+                    continue
+                if any(target.rglob("*")):
+                    extracted_volumes += 1
+
+        if extracted_volumes:
+            logger.info(
+                "Extracted %d UBIFS volume(s) from %s",
+                extracted_volumes,
+                path.name,
+            )
+            return True
+        logger.warning("ubi-reader found no extractable UBIFS volumes in %s", path)
+    except (Exception, SystemExit) as exc:  # ubi-reader uses SystemExit for fatal parse errors
+        logger.warning("Python ubi-reader failed on %s: %s", path, exc)
+    finally:
+        if ufile is not None:
+            try:
+                ufile.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return False
+
+
+def _extract_ubi_with_command(path: Path, out: Path) -> bool:
+    """Fallback to ubi-reader's console entry point when it is on PATH."""
+    for command in ("ubireader_extract_files", "ubireader_extract_files.exe"):
+        if not _have(command):
+            continue
+        res = _run([command, "-o", str(out), str(path)])
+        if any(item.is_file() for item in out.rglob("*")):
+            if res.returncode != 0:
+                logger.warning(
+                    "%s returned %d but produced files for %s: %s",
+                    command,
+                    res.returncode,
+                    path.name,
+                    _stderr(res),
+                )
+            return True
+        logger.warning("%s failed on %s: %s", command, path, _stderr(res))
+    return False
+
+
+def extract_ubi(path: Path, ctx: ExtractContext) -> Path | None:
+    """Extract UBI images whose volumes contain UBIFS filesystems."""
+    out = _new_workdir(ctx, "ubi")
+    if _extract_ubi_with_python(path, out):
+        return out
+    # Use a fresh empty directory: the Python backend may have left a partial
+    # volume tree, while the console entry point rejects non-empty outputs.
+    out = _new_workdir(ctx, "ubi")
+    if _extract_ubi_with_command(path, out):
+        return out
+    raise ExtractionError(
+        "UBI/UBIFS support requires the Python 'ubi-reader' package "
+        "(install with: python -m pip install ubi-reader)"
     )
-    return None
 
 
 def _stderr(res: subprocess.CompletedProcess) -> str:
@@ -742,7 +855,19 @@ class ScanResult:
 
 
 def is_rfcard_name(name: str) -> bool:
-    return bool(RFCARD_PATTERN.match(name))
+    return bool(RFCARD_PATTERN.match(name) or LEGACY_RFCARD_PATTERN.match(name))
+
+
+def is_rfcard_path(path: Path) -> bool:
+    """Identify modern cards and legacy cards in known RF-card directories."""
+    if RFCARD_PATTERN.match(path.name):
+        return True
+    if not LEGACY_RFCARD_PATTERN.match(path.name):
+        return False
+    return any(
+        part.casefold() in {"so", "rfcards"}
+        for part in path.parent.parts
+    )
 
 
 def is_sidecar_name(name: str) -> bool:
@@ -763,7 +888,7 @@ def discover_candidates(root: Path) -> tuple[list[Path], list[Path]]:
         if not path.is_file():
             continue
         name = path.name
-        if is_rfcard_name(name):
+        if is_rfcard_path(path):
             mbns.append(path)
         elif is_sidecar_name(name):
             sidecars.append(path)
@@ -822,10 +947,12 @@ __all__ = [
     "extract_sparse",
     "extract_super",
     "extract_tar",
+    "extract_ubi",
     "extract_xz",
     "extract_zip",
     "extract_zstd",
     "is_rfcard_name",
+    "is_rfcard_path",
     "is_sidecar_name",
     "scan_container",
     "sidecars_in_directory",

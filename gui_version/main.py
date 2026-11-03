@@ -79,7 +79,7 @@ class ExtractorGUI:
 
         self.source_var = tk.StringVar(value="No imports")
         self.status_var = tk.StringVar(
-            value="Import a modem.img, RF MBN, or iPhone .ipsw/.bbfw to begin."
+            value="Import a modem image, UBI, RF MBN, or iPhone .ipsw/.bbfw to begin."
         )
         self.format_vars = {
             "mbn": tk.BooleanVar(value=False),
@@ -94,7 +94,11 @@ class ExtractorGUI:
 
         top = ttk.Frame(outer)
         top.pack(fill="x", pady=(0, self.s(10)))
-        self.import_button = ttk.Button(top, text="Import .img, .mbn, or .ipsw", command=self.choose_source)
+        self.import_button = ttk.Button(
+            top,
+            text="Import image / UBI / MBN / IPSW",
+            command=self.choose_source,
+        )
         self.import_button.pack(side="left")
         ttk.Label(top, textvariable=self.source_var).pack(
             side="left", fill="x", expand=True, padx=(self.s(12), self.s(12))
@@ -275,12 +279,16 @@ class ExtractorGUI:
             filetypes=(
                 (
                     "Modem images, archives, and MBNs",
-                    "*.img *.bin *.mbn *.gz *.xz *.zst *.zip *.tar *.tar.md5 *.tgz *.lz4 *.7z"
+                    "*.img *.bin *.ubi *.mbn *.gz *.xz *.zst *.zip *.tar *.tar.md5 *.tgz *.lz4 *.7z"
                     " *.bbfw *.ipsw",
                 ),
                 ("MBN files", "*.mbn"),
+                ("UBI images", "*.ubi"),
                 ("iPhone baseband firmware", "*.bbfw *.ipsw"),
-                ("Modem images and archives", "*.img *.bin *.gz *.xz *.zst *.zip *.tar *.tar.md5 *.tgz *.lz4 *.7z"),
+                (
+                    "Modem images and archives",
+                    "*.img *.bin *.ubi *.gz *.xz *.zst *.zip *.tar *.tar.md5 *.tgz *.lz4 *.7z",
+                ),
                 ("All files", "*.*"),
             ),
         )
@@ -460,7 +468,8 @@ class ExtractorGUI:
         self.refresh_tree()
         self._update_source_label()
         self.status_var.set(
-            "Imports cleared. Import a modem.img, RF MBN, or iPhone .ipsw/.bbfw to begin."
+            "Imports cleared. Import a modem image, UBI, RF MBN, or "
+            "iPhone .ipsw/.bbfw to begin."
         )
         self.clear_imports_button.configure(state="disabled")
         self.append_log("Cleared all imported sources and MBN rows.")
@@ -706,7 +715,7 @@ def build_cli() -> argparse.ArgumentParser:
         "source",
         nargs="?",
         type=Path,
-        help="FAT16 modem.img or a directly named RF MBN",
+        help="modem image/UBI container or a directly named RF MBN",
     )
     parser.add_argument("--list", action="store_true", help="list candidate MBNs")
     parser.add_argument("-o", "--output", type=Path, help="export directory")

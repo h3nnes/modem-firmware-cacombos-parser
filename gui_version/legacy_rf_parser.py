@@ -53,11 +53,18 @@ HI_INLINE_BAND_GROUP_RECORD_SIZE = 8
 HI_INLINE_MAX_COMPONENTS = 12
 HI_INLINE_PROPERTY_OFFSET = 96
 HI_INLINE_COUNT_OFFSET = 98
+MAGNUS_INLINE_COMBO_RECORD_SIZE = 150
+MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE = 12
+MAGNUS_INLINE_MAX_COMPONENTS = 12
+MAGNUS_INLINE_PROPERTY_OFFSET = 146
+MAGNUS_INLINE_COUNT_OFFSET = 147
+MAGNUS_INLINE_BCS_OFFSET = 148
 MAX_GROUPS_PER_COMBO = 12
 UNUSED_GROUP_INDEX = 0xFFFF
 
 # B826 source enum values used by Qualcomm's diagnostic serialization.
 TABLE_SOURCE_INFO = {
+    "lteca": ("RF_LTE_CA", None),
     "endc": ("RF_ENDC", 3),
     "nrca": ("RF_NRCA", 4),
     "nrdc": ("RF_NRDC", 5),
@@ -868,6 +875,116 @@ def validate_candidate(
     if descriptor_offset < 0 or descriptor_offset + 20 > len(data):
         return None
 
+    # Magnus-era MPSS.HI cards use a compact 24-byte descriptor containing a
+    # 32-bit count and a pointer to 150-byte records.  Each record embeds up to
+    # twelve native 12-byte components, followed by a six-byte trailer.  This
+    # is distinct from both the earlier HI inline-100 representation and the
+    # later shared-band-group descriptors.
+    #
+    # Native component byte layout (confirmed against generated RFCard data):
+    #   +2 tech in the high bits (LTE=0x20, NR=0x40), +3 DL class,
+    #   +4 DL BW, +5 DL antenna,
+    #   +6 UL class, +7 UL BW, +8 UL antenna, +9 feature byte, +10 uint16 band.
+    # Trailer: +146 combination property, +147 active count, +148 BCS.
+    if descriptor_offset + 24 <= len(data):
+        magnus_count, magnus_records_va = struct.unpack_from(
+            "<II", data, descriptor_offset
+        )
+        magnus_reserved = data[descriptor_offset + 8:descriptor_offset + 24]
+        magnus_records_offset = image.va_to_offset(
+            magnus_records_va,
+            magnus_count * MAGNUS_INLINE_COMBO_RECORD_SIZE,
+        )
+        if (
+            1 <= magnus_count <= 100_000
+            and not any(magnus_reserved)
+            and magnus_records_offset is not None
+        ):
+            if exhaustive:
+                magnus_indices: Sequence[int] = range(magnus_count)
+            else:
+                magnus_indices = sorted(
+                    index
+                    for index in {
+                        0,
+                        1,
+                        magnus_count // 4,
+                        magnus_count // 2,
+                        magnus_count - 1,
+                    }
+                    if 0 <= index < magnus_count
+                )
+
+            magnus_valid = True
+            highest_antenna_index = 0
+            for combo_index in magnus_indices:
+                record_offset = (
+                    magnus_records_offset
+                    + combo_index * MAGNUS_INLINE_COMBO_RECORD_SIZE
+                )
+                num_entries = data[
+                    record_offset + MAGNUS_INLINE_COUNT_OFFSET
+                ]
+                if not 1 <= num_entries <= MAGNUS_INLINE_MAX_COMPONENTS:
+                    magnus_valid = False
+                    break
+                for component_index in range(MAGNUS_INLINE_MAX_COMPONENTS):
+                    component_offset = (
+                        record_offset
+                        + component_index
+                        * MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE
+                    )
+                    component = data[
+                        component_offset:
+                        component_offset + MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE
+                    ]
+                    if component_index >= num_entries:
+                        # Generated records use a two-byte 0x0002 sentinel in
+                        # the first unused component; all later slots are zero.
+                        expected = (
+                            b"\x02\x00" + b"\0" * 10
+                            if component_index == num_entries
+                            else b"\0" * 12
+                        )
+                        if component != expected:
+                            magnus_valid = False
+                            break
+                        continue
+                    tech = component[2] >> 5
+                    band = struct.unpack_from("<H", component, 10)[0]
+                    dl_class = component[3]
+                    ul_class = component[6]
+                    if (
+                        tech not in (1, 2)
+                        or not 1 <= band <= 511
+                        or not 1 <= dl_class <= 31
+                        or ul_class > 31
+                    ):
+                        magnus_valid = False
+                        break
+                    highest_antenna_index = max(
+                        highest_antenna_index,
+                        component[5],
+                        component[8],
+                    )
+                if not magnus_valid:
+                    break
+
+            if magnus_valid:
+                return (
+                    magnus_count,
+                    magnus_records_offset,
+                    0,
+                    highest_antenna_index + 1,
+                    -1,
+                    MAGNUS_INLINE_COUNT_OFFSET,
+                    MAGNUS_INLINE_COMBO_RECORD_SIZE,
+                    MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE,
+                    "magnus_inline_150",
+                    "magnus_native_12",
+                    None,
+                )
+
     # Earlier MPSS.HI cards store every NR/EN-DC band component directly in a
     # 100-byte combination record instead of referencing a shared band-group
     # table.  The 24-byte descriptor mirrors the legacy LTE descriptor:
@@ -1112,6 +1229,7 @@ NAMED_COMBO_TABLE_SUFFIXES = (
     ("nr5g_nr5g_combos_info_table_sub_cap_high", "nrdc"),
     ("lte_nr5g_combos_info_table_sub_cap_high", "endc"),
     ("nr5g_combos_info_table_sub_cap_high", "nrca"),
+    ("lte_combos_info_table_sub_cap_high", "lteca"),
 )
 
 
@@ -1227,7 +1345,7 @@ def find_named_descriptors(
         for kind, descriptor, symbol_name in found
     ]
 
-    order = {"endc": 0, "nrca": 1, "nrdc": 2}
+    order = {"lteca": 0, "endc": 1, "nrca": 2, "nrdc": 3}
     found.sort(
         key=lambda item: (
             order.get(item[0], 9),
@@ -1278,23 +1396,34 @@ def descriptor_rat_signatures(
 ) -> set[frozenset[int]]:
     """Return the RAT set used by each kind of combination in a table."""
     signatures: set[frozenset[int]] = set()
-    if descriptor.descriptor_layout == "hi_inline_100":
+    if descriptor.descriptor_layout in ("hi_inline_100", "magnus_inline_150"):
         for combo_index in range(descriptor.combo_count):
             offset = (
                 descriptor.combos_file_offset
                 + combo_index * descriptor.combo_record_size
             )
             num_entries = data[offset + descriptor.count_byte_offset]
-            rats = {
-                struct.unpack_from(
-                    "<H",
-                    data,
-                    offset
-                    + component_index * descriptor.band_group_record_size,
-                )[0]
-                & 0x3
-                for component_index in range(num_entries)
-            }
+            if descriptor.descriptor_layout == "magnus_inline_150":
+                rats = {
+                    data[
+                        offset
+                        + component_index * descriptor.band_group_record_size
+                        + 2
+                    ]
+                    >> 5
+                    for component_index in range(num_entries)
+                }
+            else:
+                rats = {
+                    struct.unpack_from(
+                        "<H",
+                        data,
+                        offset
+                        + component_index * descriptor.band_group_record_size,
+                    )[0]
+                    & 0x3
+                    for component_index in range(num_entries)
+                }
             signatures.add(frozenset(rats))
         return signatures
 
@@ -1377,8 +1506,12 @@ def make_descriptor(
         band_group_layout,
         antenna_table_va,
     ) = layout
-    if descriptor_layout == "hi_inline_100":
-        combo_count = struct.unpack_from("<H", data, descriptor_offset)[0]
+    if descriptor_layout in ("hi_inline_100", "magnus_inline_150"):
+        combo_count = struct.unpack_from(
+            "<I" if descriptor_layout == "magnus_inline_150" else "<H",
+            data,
+            descriptor_offset,
+        )[0]
         combos_va = struct.unpack_from("<I", data, descriptor_offset + 4)[0]
         groups_va = 0
         groups_offset = 0
@@ -1410,6 +1543,74 @@ def make_descriptor(
 
 def parse_band_group(data: bytes, descriptor: Descriptor, index: int) -> dict[str, Any]:
     offset = descriptor.band_groups_file_offset + index * descriptor.band_group_record_size
+    if descriptor.band_group_layout == "magnus_native_12":
+        raw = data[offset:offset + MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE]
+        native_word_0 = struct.unpack_from("<H", raw, 0)[0]
+        tech_field = raw[2]
+        rat_id = tech_field >> 5
+        rat = {1: "LTE", 2: "NR"}.get(rat_id, f"RAT_{rat_id}")
+        dl_bw_class_code = raw[3]
+        dl_bw_code = raw[4]
+        dl_antenna_index = raw[5]
+        ul_bw_class_code = raw[6]
+        ul_bw_code = raw[7]
+        ul_antenna_index = raw[8]
+        feature_byte = raw[9]
+        band = struct.unpack_from("<H", raw, 10)[0]
+        band_label = f"B{band}" if rat == "LTE" else f"n{band}"
+        dl_bw_class = bandwidth_class_label(dl_bw_class_code)
+        dl_pattern, dl_antenna_name = antenna_info(dl_antenna_index)
+        ul_pattern, ul_antenna_name = antenna_info(ul_antenna_index)
+        words = struct.unpack_from("<6H", raw)
+        return {
+            "group_index": index,
+            "file_offset": offset,
+            "file_offset_hex": f"0x{offset:X}",
+            "raw_hex": raw.hex(" "),
+            "raw_words": list(words),
+            "native_word_0_raw": native_word_0,
+            "tech_field_raw": tech_field,
+            "tech_field_hex": f"0x{tech_field:02X}",
+            "band_code_raw": band,
+            "band_code_hex": f"0x{band:04X}",
+            "band_code_high": 0,
+            "dl_bw_class_code": dl_bw_class_code,
+            "dl_bw_class": dl_bw_class,
+            "rat_id": rat_id,
+            "rat": rat,
+            "band": band,
+            "band_label": band_label,
+            "band_class_label": f"{band_label}{dl_bw_class}",
+            "dl_bw_code": dl_bw_code,
+            "dl_bandwidth": bandwidth_label(dl_bw_code),
+            "dl_bandwidth_parts_mhz": bandwidth_parts(dl_bw_code),
+            "ul_present": ul_bw_class_code != 0,
+            "ul_bw_class_code": ul_bw_class_code,
+            "ul_bw_class": bandwidth_class_label(ul_bw_class_code),
+            "band_group_layout": descriptor.band_group_layout,
+            "field_2_unknown_high": 0,
+            "native_word1_prefix_bit": None,
+            "native_word2_prefix_bit": None,
+            "x75_word1_alignment_bit": None,
+            "x75_word2_alignment_bit": None,
+            "ul_bw_code": ul_bw_code,
+            "ul_bandwidth": bandwidth_label(ul_bw_code),
+            "ul_bandwidth_parts_mhz": bandwidth_parts(ul_bw_code),
+            "dl_antenna_index": dl_antenna_index,
+            "dl_antenna": dl_antenna_name,
+            "dl_antenna_pattern": dl_pattern,
+            "ul_antenna_index": ul_antenna_index,
+            "ul_antenna": ul_antenna_name,
+            "ul_antenna_pattern": ul_pattern,
+            "feature_byte_raw": feature_byte,
+            "feature_byte_hex": f"0x{feature_byte:02X}",
+            "feature_word_3_raw": words[3],
+            "feature_word_3_hex": f"0x{words[3]:04X}",
+            "feature_word_4_raw": words[4],
+            "feature_word_4_hex": f"0x{words[4]:04X}",
+            "feature_word_5_raw": words[5],
+            "feature_word_5_hex": f"0x{words[5]:04X}",
+        }
     if descriptor.band_group_record_size == 8:
         words = struct.unpack_from("<4H", data, offset) + (0, 0)
     else:
@@ -1606,15 +1807,24 @@ def parse_combo(
     band_groups: Sequence[dict[str, Any]],
     combo_index: int,
 ) -> dict[str, Any]:
-    if descriptor.descriptor_layout == "hi_inline_100":
+    if descriptor.descriptor_layout in ("hi_inline_100", "magnus_inline_150"):
         offset = (
             descriptor.combos_file_offset
             + combo_index * descriptor.combo_record_size
         )
-        combo_flags = data[offset + HI_INLINE_PROPERTY_OFFSET]
-        reserved_byte = data[offset + HI_INLINE_PROPERTY_OFFSET + 1]
+        if descriptor.descriptor_layout == "magnus_inline_150":
+            property_offset = MAGNUS_INLINE_PROPERTY_OFFSET
+            bcs_offset = MAGNUS_INLINE_BCS_OFFSET
+            reserved_word = struct.unpack_from("<H", data, offset + 144)[0]
+            reserved_byte = data[offset + 149]
+        else:
+            property_offset = HI_INLINE_PROPERTY_OFFSET
+            bcs_offset = descriptor.count_byte_offset + 1
+            reserved_word = 0
+            reserved_byte = data[offset + HI_INLINE_PROPERTY_OFFSET + 1]
+        combo_flags = data[offset + property_offset]
         num_band_entries = data[offset + descriptor.count_byte_offset]
-        bcs_num = data[offset + descriptor.count_byte_offset + 1]
+        bcs_num = data[offset + bcs_offset]
         inline_descriptor = replace(
             descriptor,
             band_groups_file_offset=offset,
@@ -1665,7 +1875,7 @@ def parse_combo(
             "reserved_byte_1": reserved_byte,
             "reserved_byte_2": 0,
             "num_band_entries": num_band_entries,
-            "reserved_word": 0,
+            "reserved_word": reserved_word,
             "envelope_mask": 0,
             "envelope_mask_hex": "0x00000000",
             "subset_mask": 0,
@@ -1761,7 +1971,7 @@ def parse_descriptor(
 ) -> dict[str, Any]:
     band_groups = (
         []
-        if descriptor.descriptor_layout == "hi_inline_100"
+        if descriptor.descriptor_layout in ("hi_inline_100", "magnus_inline_150")
         else [
             parse_band_group(data, descriptor, index)
             for index in range(descriptor.band_group_count)
@@ -1916,7 +2126,9 @@ def parse_tables(
             ]
     if table_kind == "all":
         selected = [
-            item for item in classified if item[0] in ("endc", "nrca", "nrdc")
+            item
+            for item in classified
+            if item[0] in ("lteca", "endc", "nrca", "nrdc")
         ]
     else:
         selected = [item for item in classified if item[0] == table_kind]
@@ -1938,7 +2150,7 @@ def parse_tables(
 
     selected.sort(
         key=lambda item: (
-            {"endc": 0, "nrca": 1, "nrdc": 2}.get(item[0], 9),
+            {"lteca": 0, "endc": 1, "nrca": 2, "nrdc": 3}.get(item[0], 9),
             item[1].file_offset,
         )
     )
@@ -2188,7 +2400,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--table",
-        choices=("endc", "nrca", "nrdc", "all"),
+        choices=("lteca", "endc", "nrca", "nrdc", "all"),
         default="endc",
         help="RF table to parse (default: endc)",
     )

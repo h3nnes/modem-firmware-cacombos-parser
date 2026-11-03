@@ -1,10 +1,12 @@
 __pycache__/
 /test/
 *.txt
+!requirements.txt
 *.mbn
 *.json
 *.csv
 *.img
+*.ubi
 *.zip
 *.bbfw
 *.ipsw

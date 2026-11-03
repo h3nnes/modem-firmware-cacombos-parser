@@ -63,6 +63,56 @@ def inline_fixture(combos: list[list[tuple[int, int]]]) -> bytes:
     return bytes(data)
 
 
+def magnus_component(
+    rat: int,
+    band: int,
+    dl_class: int = 1,
+    *,
+    word_0: int = 0,
+    dl_bw: int = 14,
+    dl_ant: int = 3,
+    ul_class: int = 1,
+    ul_bw: int = 14,
+    ul_ant: int = 1,
+    feature: int = 10,
+) -> bytes:
+    return struct.pack(
+        "<HBBBBBBBBH",
+        word_0,
+        rat << 5,
+        dl_class,
+        dl_bw,
+        dl_ant,
+        ul_class,
+        ul_bw,
+        ul_ant,
+        feature,
+        band,
+    )
+
+
+def magnus_fixture(combos: list[list[tuple[int, int, int]]]) -> bytes:
+    data = bytearray(FlatImage.records_offset + len(combos) * 150)
+    struct.pack_into("<II4I", data, 0, len(combos), FlatImage.records_va, 0, 0, 0, 0)
+    for combo_index, entries in enumerate(combos):
+        offset = FlatImage.records_offset + combo_index * 150
+        for position, (rat, band, dl_class) in enumerate(entries):
+            start = offset + position * 12
+            data[start:start + 12] = magnus_component(
+                rat,
+                band,
+                dl_class,
+                word_0=position + 3,
+            )
+        if len(entries) < 12:
+            sentinel = offset + len(entries) * 12
+            data[sentinel:sentinel + 12] = b"\x02\x00" + b"\0" * 10
+        data[offset + 146] = 1
+        data[offset + 147] = len(entries)
+        data[offset + 148] = 5
+    return bytes(data)
+
+
 class HiInlineDescriptorTests(unittest.TestCase):
     def test_nr_ca_inline_descriptor_and_combos(self) -> None:
         data = inline_fixture([[(2, 79), (2, 41)], [(2, 78)]])
@@ -111,6 +161,49 @@ class HiInlineDescriptorTests(unittest.TestCase):
     def test_nonzero_unused_component_is_rejected(self) -> None:
         data = bytearray(inline_fixture([[(2, 78)]]))
         data[FlatImage.records_offset + 8] = 1
+        self.assertIsNone(
+            legacy.validate_candidate(
+                bytes(data),
+                FlatImage(bytes(data)),
+                0,
+                exhaustive=True,
+            )
+        )
+
+
+class MagnusInlineDescriptorTests(unittest.TestCase):
+    def test_native_150_endc_descriptor_and_band_location(self) -> None:
+        data = magnus_fixture([[(1, 39, 1), (2, 79, 3)]])
+        image = FlatImage(data)
+
+        layout = legacy.validate_candidate(data, image, 0, exhaustive=True)
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout[8], "magnus_inline_150")
+        self.assertEqual(layout[9], "magnus_native_12")
+
+        descriptor = legacy.make_descriptor(data, image, 0, layout)
+        self.assertEqual(legacy.classify_descriptor(data, descriptor), "endc")
+        parsed = legacy.parse_descriptor(
+            Path("625_0_0.mbn"),
+            data,
+            descriptor,
+            discovery="unit test",
+            table_kind="endc",
+            detected_table_count=1,
+        )
+        combo = parsed["combinations"][0]
+        self.assertEqual(combo["combination"], "DC_B39_n79")
+        self.assertEqual(combo["combination_with_classes"], "DC_B39A_n79C")
+        self.assertEqual(combo["bcs_num"], 5)
+        self.assertEqual(combo["power_class_raw"], 1)
+        self.assertEqual(
+            [(entry["rat"], entry["band"]) for entry in combo["entries"]],
+            [("LTE", 39), ("NR", 79)],
+        )
+
+    def test_bad_native_150_sentinel_is_rejected(self) -> None:
+        data = bytearray(magnus_fixture([[(2, 78, 1)]]))
+        data[FlatImage.records_offset + 12] = 3
         self.assertIsNone(
             legacy.validate_candidate(
                 bytes(data),
