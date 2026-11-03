@@ -1,7 +1,7 @@
 // Detect-table invariants: fixed order, same magic
 // offsets/bytes, same tag strings. Unsupported-container descriptors carry the
 // tool the Python extractor would have invoked (or null for the hard-rejected
-// F2FS/UBI branches).
+// F2FS branch); UBI/UBIFS is handled in-house by ubi.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detect, UNSUPPORTED_TAGS, SUPPORTED_TAGS } from "../js/lib/formats.js";
@@ -92,13 +92,14 @@ test("unsupported containers name the tool the Python extractor would call", () 
   assert.equal(UNSUPPORTED_TAGS.xz.tool, "xz");
   assert.equal(UNSUPPORTED_TAGS.zstd.tool, "zstd");
   assert.equal(UNSUPPORTED_TAGS.f2fs.tool, null);
-  assert.equal(UNSUPPORTED_TAGS.ubi.tool, null);
+  // UBI is handled in-house (ubi.js), not by an external tool.
+  assert.equal(UNSUPPORTED_TAGS.ubi, undefined);
   // ext4 is handled in-house (radio.img's sparse payload is an ext4 filesystem).
   assert.equal(UNSUPPORTED_TAGS.ext4, undefined);
 });
 
 test("corpus-relevant containers are supported in-house", () => {
-  for (const tag of ["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "bbcfg", "ext4"]) {
+  for (const tag of ["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "bbcfg", "ext4", "ubi"]) {
     assert.ok(SUPPORTED_TAGS.has(tag), `${tag} must be supported`);
   }
   for (const tag of Object.keys(UNSUPPORTED_TAGS)) {

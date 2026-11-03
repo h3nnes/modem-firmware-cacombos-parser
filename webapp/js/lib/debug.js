@@ -19,6 +19,7 @@ export const debugCounters = {
   renderMtkLteLog: 0, // MTK LTE CA_COMB_INFO renders (mtk_trace.renderLteLog)
   fatWalk: 0, // Fat16Image.walk() traversals
   ext4Walk: 0, // Ext4Image.walk() traversals
+  ubiWalk: 0, // UbiImage.walk() traversals
   postMessage: 0, // worker replies posted (host<->worker transfer volume)
 };
 

@@ -12,3 +12,26 @@
   and POSIX-style paths.
 - Expand regression coverage for HI inline layouts, UBI detection, and legacy
   RFCard discovery.
+
+### Webapp
+
+- Port the Magnus inline-150 descriptor and native 12-byte component decoder
+  to `webapp/js/lib/legacy_parser.js` (byte-exact against the desktop parser,
+  including field order).
+- Add a native browser UBI/UBIFS reader (`webapp/js/lib/ubi.js`): EC/VID
+  headers, volume tables, image/volume grouping, the UBIFS index tree, and
+  none/LZO1X/zlib data-node decompression. No external tools, no dependencies.
+  zstd nodes and encrypted volumes are skipped with a warning.
+- Unpack UBI images under `ubi/<image_seq>/<volume>/...`, matching the desktop
+  tool's `out/<image_seq>/<volume>/...` layout.
+- Count named legacy LTE-CA tables in the card-list combo counts, so a Magnus
+  card's LTE count includes its `lteca` descriptor.
+- Accept numeric legacy MBNs below `so` (and Apple's `rfcards`) with both
+  path separator styles normalized.
+- Register `ubi` as a supported container and add `.ubi` to the file picker.
+- Bump the reported parser version to 1.9.0.
+
+Webapp/desktop differences: the browser has no `ubi-reader` dependency
+(implemented natively), and UBIFS zstd/encrypted content cannot be decoded, so
+those files are skipped with a warning instead of failing the whole image.
+

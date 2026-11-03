@@ -2,7 +2,7 @@
 // strings throughout. Tags routed to an in-house reader are listed in
 // SUPPORTED_TAGS; every remaining tag gets an UNSUPPORTED_TAGS descriptor
 // naming the external tool that would handle it (ext4/erofs/7z/super/payload,
-// plus the hard-rejected f2fs/ubi).
+// plus the hard-rejected f2fs).
 // xz/zstd have no browser decoder, so they stay unsupported here.
 
 const MAGIC_MAX = 4096;
@@ -100,10 +100,9 @@ export const UNSUPPORTED_TAGS = {
   xz: { tool: "xz", message: "xz stream; no xz decoder is available in the browser." },
   zstd: { tool: "zstd", message: "zstd stream; no zstd decoder is available in the browser." },
   f2fs: { tool: null, message: "looks like an F2FS image; F2FS extraction is not supported by this tool" },
-  ubi: { tool: null, message: "looks like a UBI image; UBI extraction is not supported by this tool" },
 };
 
 // Tags with an in-house reader (extractor.js): sparse (sparse.js),
 // gzip (DecompressionStream), lz4 (lz4.js), zip/tar (extractor.js),
-// fat/fat_or_mbr (fat16.js), ext4 (ext4.js), bbcfg (iphone.js).
-export const SUPPORTED_TAGS = new Set(["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "ext4", "bbcfg"]);
+// fat/fat_or_mbr (fat16.js), ext4 (ext4.js), ubi (ubi.js), bbcfg (iphone.js).
+export const SUPPORTED_TAGS = new Set(["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "ext4", "ubi", "bbcfg"]);

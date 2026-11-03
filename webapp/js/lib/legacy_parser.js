@@ -32,11 +32,18 @@ export const HI_INLINE_BAND_GROUP_RECORD_SIZE = 8;
 export const HI_INLINE_MAX_COMPONENTS = 12;
 export const HI_INLINE_PROPERTY_OFFSET = 96;
 export const HI_INLINE_COUNT_OFFSET = 98;
+export const MAGNUS_INLINE_COMBO_RECORD_SIZE = 150;
+export const MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE = 12;
+export const MAGNUS_INLINE_MAX_COMPONENTS = 12;
+export const MAGNUS_INLINE_PROPERTY_OFFSET = 146;
+export const MAGNUS_INLINE_COUNT_OFFSET = 147;
+export const MAGNUS_INLINE_BCS_OFFSET = 148;
 export const MAX_GROUPS_PER_COMBO = 12;
 export const UNUSED_GROUP_INDEX = 0xffff;
 
 // B826 source enum values used by Qualcomm's diagnostic serialization.
 export const TABLE_SOURCE_INFO = {
+  lteca: ["RF_LTE_CA", null],
   endc: ["RF_ENDC", 3],
   nrca: ["RF_NRCA", 4],
   nrdc: ["RF_NRDC", 5],
@@ -50,7 +57,7 @@ export const TABLE_DISPLAY = {
   nr_unknown: "NR-only (unclassified)",
 };
 
-const VERSION = "1.8.0";
+const VERSION = "1.9.0";
 
 // B826 source enum per table.
 const B826_SOURCE = { endc: 3, nr_ca: 4, nrdc: 5 };
@@ -359,6 +366,99 @@ export function validateCandidate(data, image, descriptorOffset, { exhaustive })
 
   const r = new StructReader(data);
 
+  // Magnus-era MPSS.HI cards use a compact 24-byte descriptor containing a
+  // 32-bit count and a pointer to 150-byte records.  Each record embeds up to
+  // twelve native 12-byte components, followed by a six-byte trailer.  This
+  // is distinct from both the earlier HI inline-100 representation and the
+  // later shared-band-group descriptors.
+  //
+  // Native component byte layout (confirmed against generated RFCard data):
+  //   +2 tech in the high bits (LTE=0x20, NR=0x40), +3 DL class,
+  //   +4 DL BW, +5 DL antenna,
+  //   +6 UL class, +7 UL BW, +8 UL antenna, +9 feature byte, +10 uint16 band.
+  // Trailer: +146 combination property, +147 active count, +148 BCS.
+  if (descriptorOffset + 24 <= data.length) {
+    const [magnusCount, magnusRecordsVa] = r.unpack("<II", descriptorOffset);
+    const magnusReserved = data.subarray(descriptorOffset + 8, descriptorOffset + 24);
+    const magnusRecordsOffset = image.vaToOffset(
+      magnusRecordsVa,
+      magnusCount * MAGNUS_INLINE_COMBO_RECORD_SIZE,
+    );
+    if (
+      1 <= magnusCount && magnusCount <= 100000 &&
+      !magnusReserved.some((byte) => byte !== 0) &&
+      magnusRecordsOffset !== null
+    ) {
+      let magnusIndices;
+      if (exhaustive) {
+        magnusIndices = [];
+        for (let i = 0; i < magnusCount; i++) magnusIndices.push(i);
+      } else {
+        const set = new Set([0, 1, Math.floor(magnusCount / 4), Math.floor(magnusCount / 2), magnusCount - 1]);
+        magnusIndices = [...set].filter((i) => 0 <= i && i < magnusCount).sort((a, b) => a - b);
+      }
+
+      let magnusValid = true;
+      let highestAntennaIndex = 0;
+      for (const comboIndex of magnusIndices) {
+        const recordOffset = magnusRecordsOffset + comboIndex * MAGNUS_INLINE_COMBO_RECORD_SIZE;
+        const numEntries = data[recordOffset + MAGNUS_INLINE_COUNT_OFFSET];
+        if (!(1 <= numEntries && numEntries <= MAGNUS_INLINE_MAX_COMPONENTS)) {
+          magnusValid = false;
+          break;
+        }
+        for (let componentIndex = 0; componentIndex < MAGNUS_INLINE_MAX_COMPONENTS; componentIndex++) {
+          const componentOffset = recordOffset + componentIndex * MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE;
+          const component = data.subarray(componentOffset, componentOffset + MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE);
+          if (componentIndex >= numEntries) {
+            // Generated records use a two-byte 0x0002 sentinel in the first
+            // unused component; all later slots are zero.
+            for (let k = 0; k < MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE; k++) {
+              const expected = componentIndex === numEntries && k === 0 ? 0x02 : 0;
+              if (component[k] !== expected) {
+                magnusValid = false;
+                break;
+              }
+            }
+            if (!magnusValid) break;
+            continue;
+          }
+          const tech = component[2] >> 5;
+          const band = r.u16(componentOffset + 10);
+          const dlClass = component[3];
+          const ulClass = component[6];
+          if (
+            !(tech === 1 || tech === 2) ||
+            !(1 <= band && band <= 511) ||
+            !(1 <= dlClass && dlClass <= 31) ||
+            ulClass > 31
+          ) {
+            magnusValid = false;
+            break;
+          }
+          highestAntennaIndex = Math.max(highestAntennaIndex, component[5], component[8]);
+        }
+        if (!magnusValid) break;
+      }
+
+      if (magnusValid) {
+        return [
+          magnusCount,
+          magnusRecordsOffset,
+          0,
+          highestAntennaIndex + 1,
+          -1,
+          MAGNUS_INLINE_COUNT_OFFSET,
+          MAGNUS_INLINE_COMBO_RECORD_SIZE,
+          MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE,
+          "magnus_inline_150",
+          "magnus_native_12",
+          null,
+        ];
+      }
+    }
+  }
+
   if (descriptorOffset + 24 <= data.length) {
     const [inlineCount, inlinePadding] = r.unpack("<HH", descriptorOffset);
     const inlineRecordsVa = r.u32(descriptorOffset + 4);
@@ -594,6 +694,7 @@ const NAMED_COMBO_TABLE_SUFFIXES = [
   ["nr5g_nr5g_combos_info_table_sub_cap_high", "nrdc"],
   ["lte_nr5g_combos_info_table_sub_cap_high", "endc"],
   ["nr5g_combos_info_table_sub_cap_high", "nrca"],
+  ["lte_combos_info_table_sub_cap_high", "lteca"],
 ];
 
 export function rfcardNameFromSymbols(image) {
@@ -682,7 +783,7 @@ export function findNamedDescriptors(data, image) {
     symbolName,
   ]);
 
-  const order = { endc: 0, nrca: 1, nrdc: 2 };
+  const order = { lteca: 0, endc: 1, nrca: 2, nrdc: 3 };
   relabeled.sort((a, b) => {
     const ka = order[a[0]] ?? 9;
     const kb = order[b[0]] ?? 9;
@@ -728,14 +829,20 @@ const signatureKey = (rats) => [...rats].sort((a, b) => a - b).join(",");
 export function descriptorRatSignatures(data, descriptor) {
   const r = new StructReader(data);
   const signatures = new Set();
-  if (descriptor.descriptorLayout === "hi_inline_100") {
+  if (descriptor.descriptorLayout === "hi_inline_100" || descriptor.descriptorLayout === "magnus_inline_150") {
     for (let comboIndex = 0; comboIndex < descriptor.comboCount; comboIndex++) {
       const offset = descriptor.combosFileOffset + comboIndex * descriptor.comboRecordSize;
       const numEntries = r.u8(offset + descriptor.countByteOffset);
       const rats = new Set();
       for (let componentIndex = 0; componentIndex < numEntries; componentIndex++) {
-        const bandCode = r.u16(offset + componentIndex * descriptor.bandGroupRecordSize);
-        rats.add(bandCode & 0x3);
+        if (descriptor.descriptorLayout === "magnus_inline_150") {
+          rats.add(
+            r.u8(offset + componentIndex * descriptor.bandGroupRecordSize + 2) >> 5,
+          );
+        } else {
+          const bandCode = r.u16(offset + componentIndex * descriptor.bandGroupRecordSize);
+          rats.add(bandCode & 0x3);
+        }
       }
       signatures.add(signatureKey(rats));
     }
@@ -807,8 +914,9 @@ export function makeDescriptor(data, image, descriptorOffset, validatedLayout = 
   let groupsVa;
   let bandGroupCount;
   let descriptorSize;
-  if (descriptorLayout === "hi_inline_100") {
-    comboCount = r.u16(descriptorOffset);
+  if (descriptorLayout === "hi_inline_100" || descriptorLayout === "magnus_inline_150") {
+    comboCount =
+      descriptorLayout === "magnus_inline_150" ? r.u32(descriptorOffset) : r.u16(descriptorOffset);
     combosVa = r.u32(descriptorOffset + 4);
     groupsVa = 0;
     groupsOffset = 0;
@@ -841,6 +949,75 @@ export function makeDescriptor(data, image, descriptorOffset, validatedLayout = 
 export function parseBandGroup(data, descriptor, index) {
   const r = new StructReader(data);
   const offset = descriptor.bandGroupsFileOffset + index * descriptor.bandGroupRecordSize;
+  if (descriptor.bandGroupLayout === "magnus_native_12") {
+    const raw = data.subarray(offset, offset + MAGNUS_INLINE_BAND_GROUP_RECORD_SIZE);
+    const nativeWord0 = r.u16(offset);
+    const techField = raw[2];
+    const ratId = techField >> 5;
+    const rat = ratId === 1 ? "LTE" : ratId === 2 ? "NR" : `RAT_${ratId}`;
+    const dlBwClassCode = raw[3];
+    const dlBwCode = raw[4];
+    const dlAntennaIndex = raw[5];
+    const ulBwClassCode = raw[6];
+    const ulBwCode = raw[7];
+    const ulAntennaIndex = raw[8];
+    const featureByte = raw[9];
+    const band = r.u16(offset + 10);
+    const bandLabel = rat === "LTE" ? `B${band}` : `n${band}`;
+    const dlBwClass = bandwidthClassLabel(dlBwClassCode);
+    const [dlPattern, dlAntennaName] = antennaInfo(dlAntennaIndex);
+    const [ulPattern, ulAntennaName] = antennaInfo(ulAntennaIndex);
+    const words = r.unpack("<6H", offset);
+    return {
+      group_index: index,
+      file_offset: offset,
+      file_offset_hex: `0x${offset.toString(16).toUpperCase()}`,
+      raw_hex: hexSpaced(raw),
+      raw_words: [...words],
+      native_word_0_raw: nativeWord0,
+      tech_field_raw: techField,
+      tech_field_hex: `0x${hexU(techField, 2)}`,
+      band_code_raw: band,
+      band_code_hex: `0x${hexU(band, 4)}`,
+      band_code_high: 0,
+      dl_bw_class_code: dlBwClassCode,
+      dl_bw_class: dlBwClass,
+      rat_id: ratId,
+      rat,
+      band,
+      band_label: bandLabel,
+      band_class_label: `${bandLabel}${dlBwClass}`,
+      dl_bw_code: dlBwCode,
+      dl_bandwidth: bandwidthLabel(dlBwCode),
+      dl_bandwidth_parts_mhz: bandwidthParts(dlBwCode),
+      ul_present: ulBwClassCode !== 0,
+      ul_bw_class_code: ulBwClassCode,
+      ul_bw_class: bandwidthClassLabel(ulBwClassCode),
+      band_group_layout: descriptor.bandGroupLayout,
+      field_2_unknown_high: 0,
+      native_word1_prefix_bit: null,
+      native_word2_prefix_bit: null,
+      x75_word1_alignment_bit: null,
+      x75_word2_alignment_bit: null,
+      ul_bw_code: ulBwCode,
+      ul_bandwidth: bandwidthLabel(ulBwCode),
+      ul_bandwidth_parts_mhz: bandwidthParts(ulBwCode),
+      dl_antenna_index: dlAntennaIndex,
+      dl_antenna: dlAntennaName,
+      dl_antenna_pattern: dlPattern,
+      ul_antenna_index: ulAntennaIndex,
+      ul_antenna: ulAntennaName,
+      ul_antenna_pattern: ulPattern,
+      feature_byte_raw: featureByte,
+      feature_byte_hex: `0x${hexU(featureByte, 2)}`,
+      feature_word_3_raw: words[3],
+      feature_word_3_hex: `0x${hexU(words[3], 4)}`,
+      feature_word_4_raw: words[4],
+      feature_word_4_hex: `0x${hexU(words[4], 4)}`,
+      feature_word_5_raw: words[5],
+      feature_word_5_hex: `0x${hexU(words[5], 4)}`,
+    };
+  }
   const words =
     descriptor.bandGroupRecordSize === 8
       ? [...r.unpack("<4H", offset), 0, 0]
@@ -978,12 +1155,26 @@ const ratMixLabel = (rats) => {
 
 export function parseCombo(data, descriptor, bandGroups, comboIndex) {
   const r = new StructReader(data);
-  if (descriptor.descriptorLayout === "hi_inline_100") {
+  if (descriptor.descriptorLayout === "hi_inline_100" || descriptor.descriptorLayout === "magnus_inline_150") {
     const offset = descriptor.combosFileOffset + comboIndex * descriptor.comboRecordSize;
-    const comboFlags = r.u8(offset + HI_INLINE_PROPERTY_OFFSET);
-    const reservedByte = r.u8(offset + HI_INLINE_PROPERTY_OFFSET + 1);
+    let propertyOffset;
+    let bcsOffset;
+    let reservedWord;
+    let reservedByte;
+    if (descriptor.descriptorLayout === "magnus_inline_150") {
+      propertyOffset = MAGNUS_INLINE_PROPERTY_OFFSET;
+      bcsOffset = MAGNUS_INLINE_BCS_OFFSET;
+      reservedWord = r.u16(offset + 144);
+      reservedByte = r.u8(offset + 149);
+    } else {
+      propertyOffset = HI_INLINE_PROPERTY_OFFSET;
+      bcsOffset = descriptor.countByteOffset + 1;
+      reservedWord = 0;
+      reservedByte = r.u8(offset + HI_INLINE_PROPERTY_OFFSET + 1);
+    }
+    const comboFlags = r.u8(offset + propertyOffset);
     const numBandEntries = r.u8(offset + descriptor.countByteOffset);
-    const bcsNum = r.u8(offset + descriptor.countByteOffset + 1);
+    const bcsNum = r.u8(offset + bcsOffset);
     const inlineDescriptor = new Descriptor({
       ...descriptor,
       bandGroupsFileOffset: offset,
@@ -1019,7 +1210,7 @@ export function parseCombo(data, descriptor, bandGroups, comboIndex) {
       reserved_byte_1: reservedByte,
       reserved_byte_2: 0,
       num_band_entries: numBandEntries,
-      reserved_word: 0,
+      reserved_word: reservedWord,
       envelope_mask: 0,
       envelope_mask_hex: "0x00000000",
       subset_mask: 0,
@@ -1079,7 +1270,7 @@ export function parseCombo(data, descriptor, bandGroups, comboIndex) {
 
 export function parseDescriptor(path, data, descriptor, { discovery, tableKind, detectedTableCount, embeddedPath = null }) {
   const bandGroups =
-    descriptor.descriptorLayout === "hi_inline_100"
+    descriptor.descriptorLayout === "hi_inline_100" || descriptor.descriptorLayout === "magnus_inline_150"
       ? []
       : Array.from({ length: descriptor.bandGroupCount }, (_, index) => parseBandGroup(data, descriptor, index));
   const combinations = Array.from({ length: descriptor.comboCount }, (_, index) =>

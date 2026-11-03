@@ -106,6 +106,22 @@ export function matchesCandidate(name) {
   return null;
 }
 
+// Whether a legacy card's inner path is an allowed RF-card location. The
+// extractor normalizes Windows-style separators to "/" before paths reach
+// here, but a caller may still hand over a backslash path, so both are
+// normalized (image_extractor._is_so_path).
+export function isSoPath(path) {
+  const normalized = pyCasefold(String(path).replaceAll("\\", "/"));
+  return `/${normalized.replace(/^\/+|\/+$/g, "")}/`.includes("/so/");
+}
+
+// Numeric legacy cards also live under an Apple BBCFG "rfcards" directory
+// (see iphone.js); container discovery keeps them.
+export function legacyPathAllowed(path) {
+  const parts = new Set(pyCasefold(String(path).replaceAll("\\", "/")).split("/").filter(Boolean));
+  return parts.has("so") || parts.has("rfcards");
+}
+
 // --- sort + dedup -------------------------------------------------------------
 
 // Tuple comparison over exact ints: relational operators stay exact for
@@ -158,7 +174,7 @@ export function comboCounts(record, blob) {
       const cardName = rfcardNameFromSymbols(image);
       // LTE CA lives in the separate 50-byte array on generated legacy cards.
       const lteFound = findLegacyLteArray(blob, image);
-      const lte = lteFound !== null ? lteFound[2] : 0;
+      let lte = lteFound !== null ? lteFound[2] : 0;
       let descriptors;
       try {
         descriptors = findDescriptors(blob, image);
@@ -174,7 +190,8 @@ export function comboCounts(record, blob) {
       let nrCa = 0;
       let nrdc = 0;
       for (const [table, descriptor] of labeled) {
-        if (table === "endc") endc += descriptor.comboCount;
+        if (table === "lte_ca") lte += descriptor.comboCount;
+        else if (table === "endc") endc += descriptor.comboCount;
         else if (table === "nr_ca") nrCa += descriptor.comboCount;
         else if (table === "nrdc") nrdc += descriptor.comboCount;
       }
@@ -499,7 +516,7 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
     if (!matchInfo) continue;
     const { generation, match } = matchInfo;
     // Numeric legacy modules are meaningful only under the modem's /so tree.
-    if (generation === "Legacy ELF" && !pyCasefold(entry.path).includes("/so/")) continue;
+    if (generation === "Legacy ELF" && !isSoPath(entry.path)) continue;
     targets.push({ entry, fileName, generation, match });
   }
   // Per-record combo counting is the slow loop; report the total before the
@@ -559,8 +576,7 @@ async function scanExtracted(source, name, cancelled = () => false, onScanProgre
     const { generation, match } = matchInfo;
     // Numeric legacy MBNs need a "so"/"rfcards" path segment;
     // the "rfcards" allowance exists for Apple BBCFG recovery.
-    const parts = new Set(pyCasefold(path).split("/").filter(Boolean));
-    if (generation === "Legacy ELF" && !parts.has("so") && !parts.has("rfcards")) continue;
+    if (generation === "Legacy ELF" && !legacyPathAllowed(path)) continue;
     targets.push({ vfile, path, generation, match });
   }
   const records = [];
@@ -601,7 +617,7 @@ async function scanExtracted(source, name, cancelled = () => false, onScanProgre
 
 // Extracted-container scratch dirs (tool-generated tag prefixes) are
 // normalized to the bare tag so goldens are deterministic.
-const SCRATCH_DIR_RE = /^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z)_[A-Za-z0-9_]+$/;
+const SCRATCH_DIR_RE = /^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z|ubi)_[A-Za-z0-9_]+$/;
 
 export function normalizeInnerPath(innerPath) {
   const slash = innerPath.indexOf("/");

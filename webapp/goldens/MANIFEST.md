@@ -45,3 +45,13 @@ MTK DRDI differential goldens (`mtk/`):
   (sys.path-inserts `mtk-drdi-combo-parser`; the row schema lives in the
   generator's `build_tables` and must change together with
   `webapp/js/lib/mtk_tables.js`).
+
+UBI/UBIFS differential fixtures (`webapp/tests/ubi_fixtures.mjs`):
+
+- Real `UBI` images built with mtd-utils 2.3.0 (`mkfs.ubifs` + `ubinize`), stored
+  gzipped+base64 inside the test module so the UBI reader tests are hermetic.
+  The exact build commands are documented at the top of that file.
+- `webapp/js/lib/ubi.js` is validated against them for the uncompressed, LZO1X
+  and zlib data-node modes, comparing every extracted file's size and SHA-256
+  with the desktop `ubi-reader` output. Regenerate the fixtures (and re-record
+  `EXPECTED` in `webapp/tests/ubi.test.mjs`) if the reader's path shape changes.

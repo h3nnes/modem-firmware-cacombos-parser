@@ -27,6 +27,8 @@ import {
   deduplicateRecords,
   normalizeLegacyComponent,
   normalizeInnerPath,
+  isSoPath,
+  legacyPathAllowed,
 } from "../js/lib/analyzer.js";
 import { ToolError } from "../js/lib/legacy_parser.js";
 
@@ -199,8 +201,30 @@ test("normalize_inner_path folds scratch-dir tags (generate_goldens.py parity)",
   assert.equal(normalizeInnerPath("fat_gg6rsuom/image/modem_pr/so/615_0_0.mbn"), "fat/image/modem_pr/so/615_0_0.mbn");
   assert.equal(normalizeInnerPath("sparse_9Zx_A/image/modem_pr/x.mbn"), "sparse/image/modem_pr/x.mbn");
   assert.equal(normalizeInnerPath("7z_aB/image/x.mbn"), "7z/image/x.mbn");
+  assert.equal(normalizeInnerPath("ubi_0/1343868883/modem/image/modem_pr/so/549_0_1.mbn"), "ubi/1343868883/modem/image/modem_pr/so/549_0_1.mbn");
   assert.equal(normalizeInnerPath("fat_looks_like_tag_but"), "fat_looks_like_tag_but");
   assert.equal(normalizeInnerPath("/image/modem_pr/so/615_0_0.mbn"), "/image/modem_pr/so/615_0_0.mbn");
+});
+
+// image_extractor._is_so_path / the container scan gate: legacy cards are only
+// accepted below a "so" directory, with both separator styles normalized.
+test("legacy SO path filter accepts Windows and POSIX paths", () => {
+  assert.equal(isSoPath("image\\modem_pr\\so\\549_0_1.mbn"), true);
+  assert.equal(isSoPath("image/modem_pr/so/549_0_1.mbn"), true);
+  assert.equal(isSoPath("so/549_0_1.mbn"), true);
+  assert.equal(isSoPath("/image/modem_pr/so/549_0_1.mbn/extra"), true);
+  assert.equal(isSoPath("image\\mcfg\\549_0_1.mbn"), false);
+  assert.equal(isSoPath("image/modem_pr/something/549_0_1.mbn"), false);
+  assert.equal(isSoPath("image/modem_pr/software/549_0_1.mbn"), false);
+  assert.equal(isSoPath("549_0_1.mbn"), false);
+});
+
+// The container scan gate additionally allows Apple BBCFG's "rfcards" tree.
+test("legacy container gate keeps so/ and rfcards/ trees only", () => {
+  assert.equal(legacyPathAllowed("ubi_0/1/modem/image/modem_pr/so/549_0_1.mbn"), true);
+  assert.equal(legacyPathAllowed("bbcfg_0/rfcards/549_0_1.mbn"), true);
+  assert.equal(legacyPathAllowed("ubi_0/1/modem/image/modem_pr/mcfg/549_0_1.mbn"), false);
+  assert.equal(legacyPathAllowed("rfcards_0/other/549_0_1.mbn"), false);
 });
 
 test("recordJson emits the generate_goldens.py field layout", () => {

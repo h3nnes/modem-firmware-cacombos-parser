@@ -10,6 +10,7 @@
 //     7-Zip and the goldens; the tree lands in the sparse workdir)
 //   ext4 debugfs          -> ext4.js tree walk (same workdir shape)
 //   fat/fat_or_mbr 7z     -> Fat16Image walk
+//   ubi-reader            -> ubi.js UBI/UBIFS walk (image_seq/volume prefixes)
 //   lz4 CLI/lz4.frame     -> lz4.js
 //   gzip module           -> DecompressionStream
 // Everything without an in-house reader surfaces an UNSUPPORTED_TAGS warning.
@@ -18,6 +19,7 @@ import { SparseReader, scanForSparse } from "./sparse.js";
 import { decompressLz4Frame } from "./lz4.js";
 import { Fat16Image } from "./fat16.js";
 import { Ext4Image } from "./ext4.js";
+import { UbiImage } from "./ubi.js";
 import { SlicedSource } from "./source.js";
 import { extractBbcfgTree, extractEfsPathnames } from "./iphone.js";
 import { inflateSync } from "../../lib/vendor/fflate.js";
@@ -286,6 +288,8 @@ async function extractTagged(vfile, tag, ctx) {
       return extractFat(vfile, tag, ctx);
     case "ext4":
       return extractExt4(vfile, ctx);
+    case "ubi":
+      return extractUbi(vfile, ctx);
     case "gzip":
       return extractGzip(vfile, ctx);
     case "lz4":
@@ -383,6 +387,49 @@ async function extractFat(vfile, tag, ctx) {
 async function extractExt4(vfile, ctx) {
   const dir = ctx.newWorkdir("ext4");
   return placeTree(dir, new Ext4Image(vfile.asSource()), "ext4", ctx);
+}
+
+// UBI/UBIFS extraction via the in-house walk. One UBI file can hold several
+// images (image_seq) and several volumes; every extracted filesystem is
+// layered under `<image_seq>/<volume>/` inside the single ubi workdir, so the
+// virtual path becomes `ubi_0/<image_seq>/<volume>/image/...` and the
+// analyzer's normalizeInnerPath collapses ubi_0 to `ubi` - the same shape the
+// desktop tool writes (out/<image_seq>/<volume>/...). Volumes that are not
+// UBIFS are warned about and skipped rather than failing the whole image.
+async function extractUbi(vfile, ctx) {
+  const dir = ctx.newWorkdir("ubi");
+  const image = new UbiImage(vfile.asSource());
+  let entries;
+  try {
+    await image.init();
+    entries = await image.walk();
+  } catch (err) {
+    // Reader-level warnings (skipped bad PEBs/volumes) are still worth
+    // surfacing next to the failure.
+    ctx.warnings.push(...image.warnings);
+    ctx.warnings.push({ tool: "ubi", message: `UBI extraction failed for ${vfile.name}: ${err.message}` });
+    return null;
+  }
+  ctx.warnings.push(...image.warnings);
+  if (!entries.length) {
+    ctx.warnings.push({ tool: "ubi", message: `${vfile.name}: no files found in any UBIFS volume` });
+    return null;
+  }
+  for (const entry of entries) {
+    // entry.path already carries "/<image_seq>/<volume>/..."; ranged reads let
+    // headOf sniff each MBN without materializing it.
+    dir.addFile(
+      entry.path.replace(/^\//, ""),
+      new VFile(
+        entry.path.split("/").pop(),
+        () => image.readFile(entry),
+        entry.size,
+        null,
+        (offset, length) => image.readFileRange(entry, offset, length),
+      ),
+    );
+  }
+  return dir;
 }
 
 // Gzip extraction: output file named <stem or inner.bin> inside the gzip
