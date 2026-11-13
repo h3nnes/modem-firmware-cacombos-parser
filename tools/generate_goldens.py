@@ -21,7 +21,7 @@ RAW_HEX_LIMIT = 64
 # goldens are deterministic across regeneration runs; the JS port applies the
 # same rule to its own extraction paths before comparing.
 SCRATCH_DIR_RE = re.compile(
-    r"^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z|ubi)_[A-Za-z0-9_]+$"
+    r"^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z|ubi|fbpk)_[A-Za-z0-9_]+$"
 )
 
 def normalize_inner_path(inner_path: str) -> str:

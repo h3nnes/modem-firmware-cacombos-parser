@@ -1,6 +1,7 @@
 // Read-only, bounded modem-container unwrapping. Recognizes MTK partition
-// headers, HBLR, extent-based ext4, Android sparse, and single-stream gzip.
-// No mounts, external programs, temporary files, or filename-specific dispatch.
+// headers, HBLR, FBPK v1 wrappers, extent-based ext4, Android sparse, and
+// single-stream gzip. No mounts, external programs, temporary files, or
+// filename-specific dispatch.
 //
 // Implementation notes (all documented here, one per line):
 // - xz is recognized but not expanded: encountering an xz layer throws
@@ -18,6 +19,7 @@
 import { sha256HexAsync } from "./hash.js";
 import { indexOfBytes, utf8 } from "./bytes.js";
 import { crc32 } from "./mtk_hash.js";
+import { FBPK_MAGIC, parseFbpk } from "./fbpk.js";
 
 export const MTK_MAGIC = new Uint8Array([0x88, 0x16, 0x88, 0x58]);
 const SPARSE_MAGIC = new Uint8Array([0x3a, 0xff, 0x26, 0xed]);
@@ -94,6 +96,7 @@ export function kindOf(data) {
   // xz is sniffed but not expanded: the layer chain throws when it reaches it.
   if (startsWith(data, new Uint8Array([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]))) return "xz";
   if (startsWith(data, HBLR_MAGIC)) return "hblr";
+  if (startsWith(data, FBPK_MAGIC)) return "fbpk";
   if (data.length >= 1082 && data[1080] === 0x53 && data[1081] === 0xef) return "ext4";
   if (startsWith(data, MTK_MAGIC)) return "mtk";
   return null;
@@ -593,6 +596,22 @@ class Unwrapper {
     }
   }
 
+  // FBPK v1 wrapper (Pixel radio images). Entries are zero-copy views of the
+  // container; each payload is sniffed/walked by collect() like any other
+  // layer, so a `modem` ext4 entry is explored recursively.
+  *fbpk(data) {
+    const layer = this.report.layers[this.report.layers.length - 1];
+    layer.members = [];
+    const header = parseFbpk(data);
+    layer.name = header.name;
+    for (const entry of header.entries) {
+      this.entry();
+      this.charge(entry.size);
+      layer.members.push({ name: entry.name, type: entry.type, offset: entry.offset, bytes: entry.size });
+      yield [entry.name, entry.data];
+    }
+  }
+
   *mtk(data) {
     const layer = this.report.layers[this.report.layers.length - 1];
     layer.members = [];
@@ -636,6 +655,8 @@ class Unwrapper {
       await this.walk(await this.expand(data, kind), source + "!/" + kind, depth + 1);
     } else if (kind === "hblr") {
       await this.collect(this.hblr(data), source, depth);
+    } else if (kind === "fbpk") {
+      await this.collect(this.fbpk(data), source, depth);
     } else if (kind === "mtk") {
       await this.collect(this.mtk(data), source, depth);
     } else {

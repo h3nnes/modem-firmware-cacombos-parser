@@ -184,6 +184,35 @@ function buildExt4({ incompat = 0x42, inodeSize = 128, blockSizeExp = 0, romFlag
   return buf;
 }
 
+// FBPK v1: 0x54-byte header, 0x38-byte entries, payloads. Entry name is at
+// +0x04, size at +0x28, next-entry offset at +0x30, CRC32 at +0x34 and the
+// payload at +0x38. The last entry's next offset points just past EOF, as in
+// the real Pixel radio images.
+function fbpkContainer(entries, name = "release") {
+  const headerSize = 0x54;
+  const entrySize = 0x38;
+  const offsets = [];
+  let total = headerSize;
+  for (const e of entries) { offsets.push(total); total += entrySize + e.data.length; }
+  const buf = new Uint8Array(total);
+  buf.set([0x46, 0x42, 0x50, 0x4b]); // FBPK
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(4, 1, true); // version
+  for (let i = 0; i < name.length && i < 0x44; i++) buf[8 + i] = name.charCodeAt(i);
+  dv.setUint32(0x4c, entries.length, true);
+  dv.setUint32(0x50, total, true);
+  entries.forEach((e, i) => {
+    const o = offsets[i];
+    dv.setUint32(o, 1, true);
+    for (let j = 0; j < e.name.length && j < 32; j++) buf[o + 4 + j] = e.name.charCodeAt(j);
+    dv.setUint32(o + 0x28, e.data.length, true);
+    dv.setUint32(o + 0x30, i + 1 < entries.length ? offsets[i + 1] : total + 4, true);
+    dv.setUint32(o + 0x34, crc32(e.data), true);
+    buf.set(e.data, o + entrySize);
+  });
+  return buf;
+}
+
 const expectUnwrapError = async (data, message, name = "image", limits = undefined, hooks = undefined) => {
   await assert.rejects(
     () => unwrapBytes(data, name, limits, hooks),
@@ -213,9 +242,33 @@ test("mtk containers: kind sniffing", () => {
   assert.equal(kindOf(new Uint8Array([0x1f, 0x8b, 8, 0])), "gzip");
   assert.equal(kindOf(new Uint8Array([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00])), "xz");
   assert.equal(kindOf(new Uint8Array([0x48, 0x42, 0x4c, 0x52])), "hblr");
+  assert.equal(kindOf(new Uint8Array([0x46, 0x42, 0x50, 0x4b])), "fbpk");
   assert.equal(kindOf(new Uint8Array([0x88, 0x16, 0x88, 0x58])), "mtk");
   assert.equal(kindOf(new Uint8Array(1082).fill(0).map((b, i) => (i === 1080 ? 0x53 : i === 1081 ? 0xef : b))), "ext4");
   assert.equal(kindOf(new Uint8Array([1, 2, 3])), null);
+});
+
+test("mtk containers: FBPK v1 wrapper -> ext4 -> md1rom/md1drdi", async () => {
+  const ext4 = buildExt4();
+  const container = fbpkContainer([{ name: "modem", data: ext4 }], "a900a-release");
+  const parts = await unwrapBytes(container, "radio-kodiak.img");
+  assert.deepEqual(parts.report.layers.map((l) => l.format), ["fbpk", "ext4"]);
+  assert.equal(parts.report.layers[0].name, "a900a-release");
+  assert.deepEqual(
+    parts.report.layers[0].members.map((m) => [m.name, m.bytes]),
+    [["modem", ext4.length]],
+  );
+  assert.equal(parts.report.packaging, "single-drdi");
+  assert.ok(Buffer.from(parts.rom).equals(new Uint8Array([0x4d, 0x44, 0x31, 0x52, 0x4f, 0x4d, 0x21, 0x21])));
+  assert.ok(Buffer.from(parts.drdi).equals(fill(16, 9)));
+  assert.deepEqual(parts.report.selected.md1rom.sources, ["radio-kodiak.img!/modem!/md1rom"]);
+});
+
+test("mtk containers: FBPK version is validated", async () => {
+  const container = fbpkContainer([{ name: "modem", data: buildExt4() }]);
+  const v2 = container.slice();
+  new DataView(v2.buffer).setUint32(4, 2, true);
+  await expectUnwrapError(v2, "unsupported FBPK version 2 (only v1 is supported)");
 });
 
 test("mtk containers: mtk partition -> gzip -> mtk partition unwraps fully with report", async () => {

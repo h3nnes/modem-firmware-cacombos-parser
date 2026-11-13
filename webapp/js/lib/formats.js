@@ -64,6 +64,8 @@ export function detect(head, name = "") {
   if (startsWith(head, [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00])) return "xz";
   if (startsWith(head, [0x28, 0xb5, 0x2f, 0xfd])) return "zstd";
   if (startsWith(head, [0x04, 0x22, 0x4d, 0x18])) return "lz4";
+  // Google/QCOM FBPK v1 wrapper (Pixel radio images).
+  if (startsWith(head, [0x46, 0x42, 0x50, 0x4b])) return "fbpk"; // FBPK
   // Apple baseband config container; checked before the archive tags.
   if (startsWith(head, [0x00, 0x47, 0x46, 0x43]) || findBytes(head, [0x42, 0x42, 0x43, 0x46, 0x47, 0x4d, 0x42, 0x4e], 64) !== -1) return "bbcfg";
   if (startsWith(head, [0x50, 0x4b, 0x03, 0x04]) || pySuffix(name) === ".bbfw" || pySuffix(name) === ".ipsw") return "zip";
@@ -104,5 +106,6 @@ export const UNSUPPORTED_TAGS = {
 
 // Tags with an in-house reader (extractor.js): sparse (sparse.js),
 // gzip (DecompressionStream), lz4 (lz4.js), zip/tar (extractor.js),
-// fat/fat_or_mbr (fat16.js), ext4 (ext4.js), ubi (ubi.js), bbcfg (iphone.js).
-export const SUPPORTED_TAGS = new Set(["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "ext4", "ubi", "bbcfg"]);
+// fat/fat_or_mbr (fat16.js), ext4 (ext4.js), ubi (ubi.js), fbpk (fbpk.js),
+// bbcfg (iphone.js).
+export const SUPPORTED_TAGS = new Set(["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "ext4", "ubi", "fbpk", "bbcfg"]);

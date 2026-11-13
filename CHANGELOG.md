@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.9.1 - 2026-11-13
+
+### Webapp
+
+- Add native FBPK v1 container unwrapping (`webapp/js/lib/fbpk.js`). Pixel 11
+  (kodiak / MediaTek MT6986D) `radio-*.img` files start with an FBPK header
+  whose `modem` entry is an ext4 filesystem containing
+  `images/<release>/md/modem-bundle.img.gz`; the MediaTek scanner now walks that
+  chain and reports the card profiles instead of treating the file as unknown.
+- Detect FBPK in the generic container table and expose its entries as
+  zero-copy files. An FBPK entry that is an ext4 filesystem is forced through
+  the ext4 reader, because its boot block also carries a tar-style manifest.
+- Bump the reported parser version to 1.9.1.
+
 ## 1.9.0 - 2026-11-03
 
 - Add MPSS.HI Magnus/SM6350 support for 24-byte descriptors and 150-byte

@@ -35,6 +35,7 @@ test("ordering pins: payload/bootimg/super precede gzip; bbcfg precedes zip", ()
   assert.equal(detect(new Uint8Array([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00])), "xz");
   assert.equal(detect(new Uint8Array([0x28, 0xb5, 0x2f, 0xfd])), "zstd");
   assert.equal(detect(new Uint8Array([0x04, 0x22, 0x4d, 0x18])), "lz4");
+  assert.equal(detect(new Uint8Array([0x46, 0x42, 0x50, 0x4b])), "fbpk"); // FBPK
   const bbcfgHead = new Uint8Array(64);
   bbcfgHead.set([0x42, 0x42, 0x43, 0x46, 0x47, 0x4d, 0x42, 0x4e], 8); // BBCFGMBN in first 64
   assert.equal(detect(bbcfgHead), "bbcfg");
@@ -94,12 +95,15 @@ test("unsupported containers name the tool the Python extractor would call", () 
   assert.equal(UNSUPPORTED_TAGS.f2fs.tool, null);
   // UBI is handled in-house (ubi.js), not by an external tool.
   assert.equal(UNSUPPORTED_TAGS.ubi, undefined);
+  assert.ok(SUPPORTED_TAGS.has("ubi"));
+  assert.equal(UNSUPPORTED_TAGS.fbpk, undefined);
+  assert.ok(SUPPORTED_TAGS.has("fbpk"));
   // ext4 is handled in-house (radio.img's sparse payload is an ext4 filesystem).
   assert.equal(UNSUPPORTED_TAGS.ext4, undefined);
 });
 
 test("corpus-relevant containers are supported in-house", () => {
-  for (const tag of ["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "bbcfg", "ext4", "ubi"]) {
+  for (const tag of ["sparse", "gzip", "lz4", "zip", "tar", "fat", "fat_or_mbr", "bbcfg", "ext4", "ubi", "fbpk"]) {
     assert.ok(SUPPORTED_TAGS.has(tag), `${tag} must be supported`);
   }
   for (const tag of Object.keys(UNSUPPORTED_TAGS)) {

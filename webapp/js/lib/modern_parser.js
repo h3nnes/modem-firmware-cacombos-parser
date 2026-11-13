@@ -14,7 +14,7 @@ import { TABLE_DISPLAY, ToolError } from "./legacy_parser.js";
 
 export { ToolError };
 
-const VERSION = "1.9.0";
+const VERSION = "1.9.1";
 
 // Doubles round every integer past 2**53. Varints that large stay exact as
 // BigInt, everything at or below Number.MAX_SAFE_INTEGER stays a plain

@@ -21,12 +21,16 @@ import { Fat16Image } from "./fat16.js";
 import { Ext4Image } from "./ext4.js";
 import { UbiImage } from "./ubi.js";
 import { SlicedSource } from "./source.js";
+import { parseFbpkHeader } from "./fbpk.js";
 import { extractBbcfgTree, extractEfsPathnames } from "./iphone.js";
 import { inflateSync } from "../../lib/vendor/fflate.js";
 
 const MAGIC_MAX = 4096;
 const MAX_RECURSION_DEPTH = 8;
 const MIN_CONTAINER_SIZE = 512;
+// FBPK entry tables are tiny in practice (0x54 + 0x38 per entry). Bound the
+// header read so a corrupt count cannot turn into a whole-file read.
+const FBPK_TABLE_LIMIT = 16 << 20;
 // Whole-buffer extractors (gzip/lz4/zip member/raw sparse fallback) allocate
 // the compressed input AND the decompressed output at once. Past this budget the
 // container is skipped with a warning instead of aborting the tab/process on an
@@ -63,6 +67,10 @@ export class VFile {
     this.size = size;
     this.region = region;
     this.readRange = readRange;
+    // Set by an extractor when the payload's magic is ambiguous (an FBPK
+    // entry's ext4 image carries a tar manifest in its boot block, so the tar
+    // signature would otherwise win the normal detect() order).
+    this.forcedTag = null;
   }
 
   #load;
@@ -207,7 +215,7 @@ export async function unwrap(vfile, ctx, depth = 0) {
   if (vfile.size < MIN_CONTAINER_SIZE) return;
 
   const head = await headOf(vfile);
-  const tag = detect(head, vfile.name);
+  const tag = vfile.forcedTag ?? detect(head, vfile.name);
 
   if (tag === "empty" || tag === "unknown" || tag === "bootimg") {
     // For unrecognized top-level images, scan for known containers hidden
@@ -234,7 +242,7 @@ async function maybeUnwrapChild(vfile, ctx, depth) {
   // size check) — skip the header read entirely.
   if (vfile.size < MIN_CONTAINER_SIZE) return;
   // Only recurse into children whose magic clearly identifies a container.
-  const tag = detect(await headOf(vfile), vfile.name);
+  const tag = vfile.forcedTag ?? detect(await headOf(vfile), vfile.name);
   if (SUPPORTED_TAGS.has(tag) || UNSUPPORTED_TAGS[tag]) {
     await unwrap(vfile, ctx, depth);
   }
@@ -253,8 +261,8 @@ async function unwrapEmbeddedContainers(vfile, ctx, depth) {
 
 // Exported for the header-sniffing unit test: headOf must use vfile.readRange
 // (tree-backed files) without ever calling the full-file loader.
-export async function headOf(vfile) {
-  const n = Math.min(MAGIC_MAX, vfile.size);
+export async function headOf(vfile, limit = MAGIC_MAX) {
+  const n = Math.min(limit, vfile.size);
   if (n <= 0) return new Uint8Array(0);
   // Prefer a ranged reader (tree-backed files): the 4 KB sniff must not read
   // the whole file. Then a region window (zero-copy slice), then the whole-file
@@ -290,6 +298,8 @@ async function extractTagged(vfile, tag, ctx) {
       return extractExt4(vfile, ctx);
     case "ubi":
       return extractUbi(vfile, ctx);
+    case "fbpk":
+      return extractFbpk(vfile, ctx);
     case "gzip":
       return extractGzip(vfile, ctx);
     case "lz4":
@@ -387,6 +397,61 @@ async function extractFat(vfile, tag, ctx) {
 async function extractExt4(vfile, ctx) {
   const dir = ctx.newWorkdir("ext4");
   return placeTree(dir, new Ext4Image(vfile.asSource()), "ext4", ctx);
+}
+
+// FBPK v1 extraction: expose the entry payloads as zero-copy files. The payload
+// of a Pixel radio image is an ext4 filesystem; unwrap() recurses into it and
+// finds the modem bundle. Header/table parsing stays bounded - payload bytes are
+// never read here.
+async function extractFbpk(vfile, ctx) {
+  let header;
+  try {
+    // Read the fixed header first, then exactly the declared entry table.
+    const first = await headOf(vfile, 0x54);
+    let tableBytes = 0x54;
+    if (first.length >= 0x54) {
+      const count = (first[0x4c] | (first[0x4d] << 8) | (first[0x4e] << 16) | (first[0x4f] << 24)) >>> 0;
+      tableBytes = 0x54 + count * 0x38;
+    }
+    const head = await headOf(vfile, Math.min(vfile.size, tableBytes, FBPK_TABLE_LIMIT));
+    header = parseFbpkHeader(head, vfile.size);
+  } catch (err) {
+    ctx.warnings.push({ tool: "fbpk", message: `FBPK extraction failed for ${vfile.name}: ${err.message}` });
+    return null;
+  }
+  const dir = ctx.newWorkdir("fbpk");
+  const source = vfile.asSource();
+  const used = new Set();
+  for (const entry of header.entries) {
+    const base = fbpkEntryName(entry.name, entry.offset);
+    let name = base;
+    for (let n = 2; used.has(name); n++) name = `${base}_${n}`;
+    used.add(name);
+    const child = VFile.slice(name, source, entry.offset, entry.size);
+    // Pixel radio FBPK entries are ext4 images whose boot block also holds a
+    // tar-style manifest; force the ext4 reader so the manifest is not mistaken
+    // for a tar archive.
+    if (await isExt4Payload(child)) child.forcedTag = "ext4";
+    dir.addFile(name, child);
+  }
+  return dir;
+}
+
+// FBPK names are a fixed 32-byte Latin-1 field. Keep them path-safe and reject
+// "." / ".." so they cannot produce surprising inner paths (no filesystem
+// writes happen, but these names end up in records and goldens).
+function fbpkEntryName(name, offset) {
+  const cleaned = String(name || "")
+    .replace(/[\\/\u0000-\u001f\u007f]+/g, "_")
+    .replace(/^\.+$/, "")
+    .trim();
+  return cleaned || `entry_${offset}`;
+}
+
+async function isExt4Payload(vfile) {
+  if (vfile.size < 0x43a) return false;
+  const head = await headOf(vfile, 0x43a);
+  return head.length >= 0x43a && head[0x438] === 0x53 && head[0x439] === 0xef;
 }
 
 // UBI/UBIFS extraction via the in-house walk. One UBI file can hold several

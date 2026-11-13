@@ -63,6 +63,31 @@ function pad512(data) {
   return out;
 }
 
+// Minimal FBPK v1 container: 0x54 header, 0x38 entry headers, payloads.
+function buildFbpk(entries, name = "release") {
+  const headerSize = 0x54;
+  const entrySize = 0x38;
+  const offsets = [];
+  let total = headerSize;
+  for (const e of entries) { offsets.push(total); total += entrySize + e.data.length; }
+  const buf = new Uint8Array(total);
+  buf.set([0x46, 0x42, 0x50, 0x4b]); // FBPK
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(4, 1, true);
+  for (let i = 0; i < name.length && i < 0x44; i++) buf[8 + i] = name.charCodeAt(i);
+  dv.setUint32(0x4c, entries.length, true);
+  dv.setUint32(0x50, total, true);
+  entries.forEach((e, i) => {
+    const o = offsets[i];
+    dv.setUint32(o, 1, true);
+    for (let j = 0; j < e.name.length && j < 32; j++) buf[o + 4 + j] = e.name.charCodeAt(j);
+    dv.setUint32(o + 0x28, e.data.length, true);
+    dv.setUint32(o + 0x30, i + 1 < entries.length ? offsets[i + 1] : total + 4, true);
+    buf.set(e.data, o + entrySize);
+  });
+  return buf;
+}
+
 async function gzipBytes(data) {
   const stream = new Blob([data]).stream().pipeThrough(new CompressionStream("gzip"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
@@ -349,6 +374,27 @@ test("Motorola wrapper -> sparse -> ext4 chain lands under sparse_<n>/ (golden s
   assert.equal(normalizeInnerPath(paths[1]), "sparse/image/modem_pr/so/615_0_0.mbn");
   const card610 = mbns.find((m) => m.path.includes("rf_config_123"));
   assert.deepEqual(await card610.vfile.read(), card);
+});
+
+test("FBPK v1 -> ext4 chain lands under ext4_<n>/ (Pixel radio miniature)", async () => {
+  const card = strToU8("synthetic rf card bytes");
+  const ext4 = buildExt4Tree({ "/images/release/modem_pr/rf_config_123_4_5.mbn": card });
+  // The real Pixel radio ext4 boot block also carries a tar manifest. Write
+  // just enough of that signature to make detect() prefer tar, proving the
+  // FBPK extractor forces the ext4 reader instead of misreading the manifest.
+  ext4.set(strToU8("ustar"), 257);
+  const fbpk = buildFbpk([{ name: "modem", data: ext4 }], "a900a-release");
+
+  const { outputs, warnings } = await openContainer(fbpk, "radio-kodiak.img");
+  assert.deepEqual(warnings, []);
+  const { mbns } = discoverCandidates(outputs);
+  assert.equal(mbns.length, 1);
+  assert.equal(mbns[0].path, "ext4_1/images/release/modem_pr/rf_config_123_4_5.mbn");
+  assert.deepEqual(await mbns[0].vfile.read(), card);
+  // The FBPK workdir still exposes the entry itself.
+  const entry = outputs.find((d) => d.name === "fbpk_0").files("fbpk_0/");
+  assert.equal(entry.length, 1);
+  assert.equal(entry[0].vfile.size, ext4.length);
 });
 
 test("tar -> lz4 -> FAT16 chain lands under fat_<n>/ (Samsung miniature)", async () => {

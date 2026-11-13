@@ -617,7 +617,7 @@ async function scanExtracted(source, name, cancelled = () => false, onScanProgre
 
 // Extracted-container scratch dirs (tool-generated tag prefixes) are
 // normalized to the bare tag so goldens are deterministic.
-const SCRATCH_DIR_RE = /^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z|ubi)_[A-Za-z0-9_]+$/;
+const SCRATCH_DIR_RE = /^(fat|sparse|zip|tar|gzip|zstd|xz|lz4|super|payload|squashfs|erofs|ext4|7z|ubi|fbpk)_[A-Za-z0-9_]+$/;
 
 export function normalizeInnerPath(innerPath) {
   const slash = innerPath.indexOf("/");

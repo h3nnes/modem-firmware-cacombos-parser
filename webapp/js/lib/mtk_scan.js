@@ -61,7 +61,7 @@ function mtkHeadPlausible(head, name) {
     const base = String(name).split("/").pop();
     return ROLE_NAME_RE.test(base);
   }
-  return k === "android-sparse" || k === "hblr" || k === "ext4";
+  return k === "android-sparse" || k === "hblr" || k === "fbpk" || k === "ext4";
 }
 
 // Separator contract (", " / ": ") — the loader-attempts
