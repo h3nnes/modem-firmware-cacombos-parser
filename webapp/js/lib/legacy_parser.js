@@ -57,7 +57,7 @@ export const TABLE_DISPLAY = {
   nr_unknown: "NR-only (unclassified)",
 };
 
-const VERSION = "1.9.2";
+const VERSION = "1.9.3";
 
 // B826 source enum per table.
 const B826_SOURCE = { endc: 3, nr_ca: 4, nrdc: 5 };

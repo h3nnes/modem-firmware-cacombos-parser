@@ -14,7 +14,7 @@ import { TABLE_DISPLAY, ToolError } from "./legacy_parser.js";
 
 export { ToolError };
 
-const VERSION = "1.9.2";
+const VERSION = "1.9.3";
 
 // Doubles round every integer past 2**53. Varints that large stay exact as
 // BigInt, everything at or below Number.MAX_SAFE_INTEGER stays a plain
@@ -985,6 +985,13 @@ export function readRfcardInfo(datName, inputName, rrc) {
   };
 }
 
+// Append without fn.apply/spread: a large RF card can produce >100k component
+// rows, and spreading those into push() overflows the JS argument/stack limit
+// ("Maximum call stack size exceeded") in Chrome even though Node accepts it.
+function pushAll(target, items) {
+  for (const item of items) target.push(item);
+}
+
 function moduleFields(record) {
   return {
     inner_path: record.inner_path,
@@ -1034,8 +1041,8 @@ export function parseModernModule(record, blob) {
   const b826Packets = [];
   for (const suffix of ["high", "low"]) {
     const [lteCombos, lteComponents] = modernLteRows(rrc, suffix, antennaNames);
-    combinations.push(...lteCombos);
-    components.push(...lteComponents);
+    pushAll(combinations, lteCombos);
+    pushAll(components, lteComponents);
     const ltePackets = b0cdV41Packets(rrc, suffix);
     ltePackets.forEach((packet, index) => {
       b0cdPackets.push([`${suffix} LTE CA packet ${index + 1}/${ltePackets.length}`, packet]);
@@ -1043,8 +1050,8 @@ export function parseModernModule(record, blob) {
 
     for (const [prefix, table, source] of SECTION_SPECS) {
       const [comboRows, componentRows, rawRecords] = modernNrRows(rrc, suffix, prefix, table, bwNames, antennaNames);
-      combinations.push(...comboRows);
-      components.push(...componentRows);
+      pushAll(combinations, comboRows);
+      pushAll(components, componentRows);
       const packets = rawRecords.length ? b826V22Packets(rawRecords, source) : [];
       packets.forEach((packet, index) => {
         b826Packets.push([

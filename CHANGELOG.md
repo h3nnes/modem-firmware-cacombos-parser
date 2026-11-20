@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.9.3 - 2026-11-20
+
+### Webapp
+
+- Fix `Maximum call stack size exceeded` when opening large DAT/protobuf cards
+  (e.g. the 20k-NR-combo `rf_config_0511_0_0_0170.mbn`). The modern parser
+  appended row arrays with `components.push(...rows)`; Chrome's argument/stack
+  limit is lower than Node's, so the spread threw for cards with more than
+  roughly 65k component rows. Rows are now appended in a loop (`pushAll`).
+- Add a source-level regression guard against `push(...largeArray)` in
+  `modern_parser.js`.
+- Bump the webapp reporter version to 1.9.3.
+
 ## 1.9.2 - 2026-11-20
 
 - Recognize embedded FAT16 payloads inside Motorola `SINGLE_N_LONELY` radio

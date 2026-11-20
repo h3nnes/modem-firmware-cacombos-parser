@@ -13,6 +13,7 @@
 //   parseModernModule(record, blob) -> { metadata, combinations, components, diag }
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hex, hexToBytes } from "../js/lib/bytes.js";
@@ -742,4 +743,12 @@ test("b826V22 encoder matches Python-generated fixtures", () => {
     /0xB826 v22 band exceeds 9 bits: 512/);
   assert.throws(() => b826V22Component({ ...bg1, dl_max_antennas_index: 0x80 }),
     /0xB826 v22 component field exceeds its bit width/);
+});
+
+test("modern parser appends row arrays without spread (large-card stack safety)", () => {
+  // A 20k-combo card produces >65k component rows. `components.push(...rows)`
+  // overflows Chrome's argument stack ("Maximum call stack size exceeded")
+  // even though Node's larger limit accepts it; the parser must use pushAll.
+  const source = readFileSync(new URL("../js/lib/modern_parser.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\.push\(\s*\.\.\./);
 });
