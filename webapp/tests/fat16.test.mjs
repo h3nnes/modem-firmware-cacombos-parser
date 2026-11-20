@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Fat16Image } from "../js/lib/fat16.js";
+import { Fat16Image, scanForFat16 } from "../js/lib/fat16.js";
 import { BrowserFileSource, sourceFor } from "../js/lib/source.js";
-import { scanSource } from "../js/lib/analyzer.js";
+import { scanSource, normalizeInnerPath } from "../js/lib/analyzer.js";
 import { sha256HexAsync } from "../js/lib/hash.js";
 import { CORPUS_DIR, corpusAvailable } from "./helpers.mjs";
 
@@ -133,6 +134,25 @@ test("readFile rejects directories", async () => {
 test("init rejects inputs too small to be FAT", async () => {
   const fat = new Fat16Image(new BrowserFileSource(new Blob([new Uint8Array(32)])));
   await assert.rejects(() => fat.init(), /Input is too small to be a FAT filesystem/);
+});
+
+test("scanForFat16 finds an embedded boot sector and validates it", async () => {
+  const fat = buildFat16Fixture().slice();
+  fat.set(new TextEncoder().encode("MSWIN4.1"), 3);
+  const wrapped = new Uint8Array(0x3500 + fat.length);
+  wrapped.set(fat, 0x3500);
+  const src = new BrowserFileSource(new Blob([wrapped]));
+  assert.deepEqual(await scanForFat16(src, wrapped.length, 1), [0x3500]);
+
+  // A 0x55AA signature without a known FAT OEM is rejected.
+  const noOem = fat.slice();
+  noOem.fill(0, 3, 11);
+  const noOemWrapped = new Uint8Array(0x3500 + noOem.length);
+  noOemWrapped.set(noOem, 0x3500);
+  assert.deepEqual(
+    await scanForFat16(new BrowserFileSource(new Blob([noOemWrapped])), noOemWrapped.length, 1),
+    [],
+  );
 });
 
 test("init rejects non-FAT16 boot sectors", async () => {
@@ -301,6 +321,30 @@ test("scanSource onCandidate hands back the exact bytes that were hashed", async
   assert.equal(seen.length, records.length, "one hook call per record");
   for (const { record, blob } of seen) {
     assert.equal(await sha256HexAsync(blob), record.sha256, record.name);
+  }
+});
+
+test("Signature 27 Motorola radio image -> embedded FAT16 cards", {
+  skip: !existsSync(join(CORPUS_DIR, "motosignature27radio.img")),
+}, async () => {
+  const path = join(CORPUS_DIR, "motosignature27radio.img");
+  const { records, warnings } = await scanSource(await sourceFor(path), "motosignature27radio.img");
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(records.map((r) => r.name).sort(), [
+    "rf_config_0500_0_0_0170.mbn",
+    "rf_config_0501_0_0_0170.mbn",
+    "rf_config_0502_0_0_0170.mbn",
+    "rf_config_0503_0_0_0170.mbn",
+    "rf_config_0510_0_0_0170.mbn",
+    "rf_config_0511_0_0_0170.mbn",
+    "rf_config_0512_0_0_0170.mbn",
+    "rf_config_0513_0_0_0170.mbn",
+    "rf_config_0520_0_0_0170.mbn",
+  ]);
+  for (const record of records) {
+    assert.equal(record.generation, "DAT/protobuf");
+    assert.ok(normalizeInnerPath(record.inner_path).startsWith("fat/image/modem_pr/"), record.inner_path);
+    assert.ok(record.lte_combos > 0);
   }
 });
 

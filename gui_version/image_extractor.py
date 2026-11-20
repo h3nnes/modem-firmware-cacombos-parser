@@ -212,6 +212,89 @@ def _sparse_headers(path: Path, max_offsets: int = 8) -> list[int]:
     return offsets
 
 
+# FAT boot-sector OEM names accepted by ``detect`` (the same 8-byte field at
+# offset 3, after trimming NUL/space padding).
+_FAT_OEMS = {b"MSDOS5.0", b"MSWIN4.1", b"mkfs.fat", b"MSDOS"}
+_FAT_BYTES_PER_SECTOR = {512, 1024, 2048, 4096}
+
+
+def _fat_boot_valid(buffer: bytes, off: int, remaining: int) -> bool:
+    """Cheap structural validation of a FAT boot sector at ``off``."""
+    if off + 512 > len(buffer) or buffer[off] not in (0xEB, 0xE9):
+        return False
+    if buffer[off + 3 : off + 11].rstrip(b"\x00 ") not in _FAT_OEMS:
+        return False
+    if buffer[off + 510 : off + 512] != b"\x55\xaa":
+        return False
+    (
+        bytes_per_sector,
+        sectors_per_cluster,
+        reserved_sectors,
+        fat_count,
+        root_entries,
+        total16,
+        _media,
+        sectors_per_fat,
+    ) = struct.unpack_from("<HBHBHHBH", buffer, off + 11)
+    total_sectors = total16 or struct.unpack_from("<I", buffer, off + 32)[0]
+    if bytes_per_sector not in _FAT_BYTES_PER_SECTOR:
+        return False
+    if not sectors_per_cluster or sectors_per_cluster & (sectors_per_cluster - 1):
+        return False
+    if not reserved_sectors or not root_entries or not sectors_per_fat or not total_sectors:
+        return False
+    if fat_count not in (1, 2):
+        return False
+    filesystem_bytes = total_sectors * bytes_per_sector
+    return 0 < filesystem_bytes <= remaining
+
+
+def _fat_headers(path: Path, max_offsets: int = 1) -> list[int]:
+    """Return up to ``max_offsets`` embedded FAT boot-sector offsets.
+
+    Newer Motorola ``SINGLE_N_LONELY`` radio packages carry a raw FAT16
+    ``NON-HLOS.bin`` payload instead of the sparse image older packages use.
+    The boot sector starts with a jump opcode and carries a known OEM name, a
+    valid BPB and the 0x55AA signature; all are checked before a candidate is
+    accepted.
+    """
+    offsets: list[int] = []
+    size = path.stat().st_size
+    if size < 512 or max_offsets <= 0:
+        return offsets
+    chunk_size = 1 << 20
+    overlap = 512
+    seen: set[int] = set()
+    with path.open("rb") as handle:
+        pos = 0
+        while pos < size and len(offsets) < max_offsets:
+            read_size = min(chunk_size, size - pos)
+            data = handle.read(read_size)
+            if not data:
+                break
+            for opcode in (b"\xeb", b"\xe9"):
+                start = 0
+                while True:
+                    idx = data.find(opcode, start)
+                    if idx < 0:
+                        break
+                    offset = pos + idx
+                    if (
+                        idx + 512 <= len(data)
+                        and offset not in seen
+                        and _fat_boot_valid(data, idx, size - offset)
+                    ):
+                        seen.add(offset)
+                        offsets.append(offset)
+                        if len(offsets) >= max_offsets:
+                            break
+                    start = idx + 1
+                if len(offsets) >= max_offsets:
+                    break
+            pos += read_size - overlap if read_size == chunk_size else read_size
+    return sorted(offsets)
+
+
 def _read_at(handle, offset: int, n: int) -> bytes:
     handle.seek(offset)
     return handle.read(n)
@@ -271,12 +354,11 @@ def detect(path: Path) -> str:
     # UBI.
     if head.startswith(b"UBI#"):
         return "ubi"
-    # FAT12/16/32: OEM name at offset 3.
+    # FAT12/16/32: OEM name at offset 3, after trimming NUL/space padding.
     if len(head) >= 11 and head[3:11].rstrip(b"\x00 ") in (
         b"MSDOS5.0",
         b"MSWIN4.1",
         b"mkfs.fat",
-        b"FAT     ",
         b"MSDOS",
     ):
         return "fat"
@@ -834,9 +916,20 @@ def _unwrap_embedded_containers(path: Path, ctx: ExtractContext, depth: int) -> 
 
     # Android sparse images are the most common wrapped payload in Qualcomm
     # modem firmware (radio.img/non-hlos.bin style packages).
-    for offset in _sparse_headers(path):
-        logger.info("found sparse image at offset %d in %s", offset, path)
-        sliced = _new_workdir(ctx, "sliced") / (path.stem + ".sparse")
+    sparse_offsets = _sparse_headers(path)
+    if sparse_offsets:
+        for offset in sparse_offsets:
+            logger.info("found sparse image at offset %d in %s", offset, path)
+            sliced = _new_workdir(ctx, "sliced") / (path.stem + ".sparse")
+            _slice_file(path, sliced, offset)
+            unwrap(sliced, ctx, depth + 1)
+        return
+
+    # Newer Motorola packages wrap a raw FAT16 NON-HLOS.bin instead. Stop at
+    # the first validated boot sector: the modem payload comes first.
+    for offset in _fat_headers(path, 1):
+        logger.info("found FAT image at offset %d in %s", offset, path)
+        sliced = _new_workdir(ctx, "sliced") / (path.stem + ".fat")
         _slice_file(path, sliced, offset)
         unwrap(sliced, ctx, depth + 1)
 

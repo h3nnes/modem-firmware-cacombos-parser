@@ -158,6 +158,7 @@ function buildFat16Miniature(fileData) {
   dv.setUint16(19, 16405, true);
   image[21] = 0xf8;
   dv.setUint16(22, 16, true);
+  dv.setUint16(510, 0xaa55, true);
   dv.setUint16(FFAT_OFFSET + 0, 0xfff8, true);
   dv.setUint16(FFAT_OFFSET + 2, 0xffff, true); // cluster 2: IMAGE dir EOC
   dv.setUint16(FFAT_OFFSET + 4, 0xffff, true); // cluster 2: IMAGE dir EOC
@@ -374,6 +375,24 @@ test("Motorola wrapper -> sparse -> ext4 chain lands under sparse_<n>/ (golden s
   assert.equal(normalizeInnerPath(paths[1]), "sparse/image/modem_pr/so/615_0_0.mbn");
   const card610 = mbns.find((m) => m.path.includes("rf_config_123"));
   assert.deepEqual(await card610.vfile.read(), card);
+});
+
+test("Motorola wrapper -> embedded FAT16 chain lands under fat_<n>/ (Signature 27 shape)", async () => {
+  const card = strToU8("synthetic rf card bytes");
+  const fat = buildFat16Miniature(card);
+  // Signature 27 wraps a raw FAT16 NON-HLOS.bin where older radio images wrap
+  // a sparse image: same SINGLE_N_LONELY prefix, payload at 0x3500.
+  const wrapped = new Uint8Array(13568 + fat.length);
+  wrapped.set([0x53, 0x49, 0x4e, 0x47, 0x4c, 0x45, 0x5f, 0x4e, 0x5f, 0x4c, 0x4f, 0x4e, 0x45, 0x4c, 0x59, 0x00]);
+  wrapped.set(fat, 13568);
+
+  const { outputs, warnings } = await openContainer(wrapped, "motosignature27radio.img");
+  assert.deepEqual(warnings, []);
+  const { mbns } = discoverCandidates(outputs);
+  assert.equal(mbns.length, 1);
+  assert.equal(mbns[0].path, "fat_1/image/rf_config_1181_0_306.mbn");
+  assert.equal(normalizeInnerPath(mbns[0].path), "fat/image/rf_config_1181_0_306.mbn");
+  assert.deepEqual(await mbns[0].vfile.read(), card);
 });
 
 test("FBPK v1 -> ext4 chain lands under ext4_<n>/ (Pixel radio miniature)", async () => {

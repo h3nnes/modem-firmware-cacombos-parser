@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.9.2 - 2026-11-20
+
+- Recognize embedded FAT16 payloads inside Motorola `SINGLE_N_LONELY` radio
+  packages. Newer packages (e.g. Signature 27) wrap a raw FAT16
+  `NON-HLOS.bin` instead of the sparse image older `radio.img` files use, so
+  the embedded-container scan now falls back to validated FAT boot sectors.
+
+### Desktop
+
+- Scan for an embedded FAT boot sector after the sparse scan finds nothing,
+  and slice it into the normal FAT extraction pipeline.
+
+### Webapp
+
+- Add `scanForFat16` to the in-house FAT reader and use it when a top-level
+  image is not a recognized container and contains no sparse payload.
+- Verified against `motosignature27radio.img`: nine DAT/protobuf
+  `rf_config_*_0170.mbn` cards under
+  `fat/image/modem_pr/mcfg/configs/mcfg_ddr/rf/`, no warnings.
+- Bump the reported parser version to 1.9.2.
+
 ## 1.9.1 - 2026-11-13
 
 ### Webapp

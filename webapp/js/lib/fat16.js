@@ -3,6 +3,7 @@
 import { StructReader } from "./bytes.js";
 import { cp437Decode } from "./cp437.js";
 import { bump } from "./debug.js";
+import { FAT_OEMS } from "./formats.js";
 
 export class ParseError extends Error {
   constructor(message) {
@@ -294,4 +295,85 @@ export class Fat16Image {
     }
     return data.slice(0, entry.size);
   }
+}
+
+// --- embedded FAT scan ---------------------------------------------------------------
+
+// Same OEM-trimming rule as formats.detect: strip trailing NUL/space from the
+// 8-byte field at offset 3.
+function fatOemAt(data, off) {
+  let end = off + 11;
+  while (end > off + 3 && (data[end - 1] === 0 || data[end - 1] === 0x20)) end--;
+  let out = "";
+  for (let i = off + 3; i < end; i++) out += String.fromCharCode(data[i]);
+  return out;
+}
+
+const FAT_BYTES_PER_SECTOR = new Set([512, 1024, 2048, 4096]);
+
+// Cheap structural validation of a FAT boot sector at `off` in `data`.
+// `remaining` is the number of bytes from the boot sector to EOF.
+function validFatBoot(data, off, remaining) {
+  if (off + 512 > data.length) return false;
+  if (data[off] !== 0xeb && data[off] !== 0xe9) return false;
+  // Prefilter before allocating the OEM string: every accepted OEM starts
+  // with M, m or F.
+  const first = data[off + 3];
+  if (first !== 0x4d && first !== 0x6d && first !== 0x46) return false;
+  if (!FAT_OEMS.has(fatOemAt(data, off))) return false;
+  if (data[off + 510] !== 0x55 || data[off + 511] !== 0xaa) return false;
+  const u16 = (o) => data[off + o] | (data[off + o + 1] << 8);
+  const u32 = (o) => (data[off + o] | (data[off + o + 1] << 8) | (data[off + o + 2] << 16) | (data[off + o + 3] << 24)) >>> 0;
+  const bytesPerSector = u16(11);
+  const sectorsPerCluster = data[off + 13];
+  const reservedSectors = u16(14);
+  const fatCount = data[off + 16];
+  const rootEntries = u16(17);
+  const total = u16(19) || u32(32);
+  const sectorsPerFat = u16(22);
+  if (!FAT_BYTES_PER_SECTOR.has(bytesPerSector)) return false;
+  if (!sectorsPerCluster || (sectorsPerCluster & (sectorsPerCluster - 1)) !== 0) return false;
+  if (!reservedSectors || !rootEntries || !sectorsPerFat || !total) return false;
+  if (fatCount !== 1 && fatCount !== 2) return false;
+  const filesystemBytes = total * bytesPerSector;
+  return filesystemBytes > 0 && filesystemBytes <= remaining;
+}
+
+// Scan for FAT16 boot sectors embedded at arbitrary offsets. Motorola
+// SINGLE_N_LONELY packages can carry a raw FAT16 NON-HLOS.bin instead of the
+// sparse payload older radio images use. The caller usually asks for a single
+// match (maxOffsets = 1), which stops the scan at the first valid payload.
+export async function scanForFat16(source, fileSize, maxOffsets = 1) {
+  const offsets = [];
+  if (fileSize < 512 || maxOffsets <= 0) return offsets;
+  const CHUNK = 1 << 20;
+  const OVERLAP = 512;
+  const seen = new Set();
+  let pos = 0;
+  while (pos < fileSize && offsets.length < maxOffsets) {
+    const readSize = Math.min(CHUNK, fileSize - pos);
+    const data = await source.read(pos, readSize);
+    // FAT boot sectors normally start with a short jump (0xEB) or near jump
+    // (0xE9). Native indexOf keeps the per-byte cost out of JS.
+    for (const opcode of [0xeb, 0xe9]) {
+      let start = 0;
+      for (;;) {
+        const idx = data.indexOf(opcode, start);
+        if (idx < 0) break;
+        if (idx + 512 <= data.length) {
+          const offset = pos + idx;
+          if (!seen.has(offset) && validFatBoot(data, idx, fileSize - offset)) {
+            seen.add(offset);
+            offsets.push(offset);
+            if (offsets.length >= maxOffsets) break;
+          }
+        }
+        start = idx + 1;
+      }
+      if (offsets.length >= maxOffsets) break;
+    }
+    if (readSize < CHUNK) break;
+    pos += readSize - OVERLAP;
+  }
+  return offsets.sort((a, b) => a - b);
 }

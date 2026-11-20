@@ -73,8 +73,7 @@ test("FAT OEM names accepted (image_extractor.py:272-280)", () => {
     assert.equal(detect(head), "fat", oem);
   }
   // rstrip(b"\x00 ") semantics: NUL/space padding is trimmed before comparing,
-  // so the literal b"FAT     " set entry is unreachable in Python ("FAT" does
-  // not equal "FAT     ") and must stay unreachable here.
+  // so "FAT     " normalizes to "FAT" and is not a recognized OEM.
   const fatPadded = new Uint8Array(64);
   fatPadded.set([0x46, 0x41, 0x54, 0x20, 0x20, 0x20, 0x20, 0x20], 3); // "FAT     "
   assert.equal(detect(fatPadded), "unknown");

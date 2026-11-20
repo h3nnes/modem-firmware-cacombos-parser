@@ -17,7 +17,7 @@
 import { detect, UNSUPPORTED_TAGS, SUPPORTED_TAGS } from "./formats.js";
 import { SparseReader, scanForSparse } from "./sparse.js";
 import { decompressLz4Frame } from "./lz4.js";
-import { Fat16Image } from "./fat16.js";
+import { Fat16Image, scanForFat16 } from "./fat16.js";
 import { Ext4Image } from "./ext4.js";
 import { UbiImage } from "./ubi.js";
 import { SlicedSource } from "./source.js";
@@ -248,15 +248,28 @@ async function maybeUnwrapChild(vfile, ctx, depth) {
   }
 }
 
-// Scan an unrecognized top-level image for embedded sparse containers.
+// Scan an unrecognized top-level image for embedded filesystems. Older
+// Motorola SINGLE_N_LONELY radio images wrap an Android sparse image; newer
+// ones wrap a raw FAT16 NON-HLOS.bin instead. Sparse wins when present so the
+// existing corpus images keep their exact path shape.
 async function unwrapEmbeddedContainers(vfile, ctx, depth) {
-  for (const offset of await scanForSparse(vfile.asSource(), vfile.size)) {
+  const source = vfile.asSource();
+  const stem = pyStem(vfile.name) || "inner";
+  const slice = async (offset, suffix) => {
     const workdir = ctx.newWorkdir("sliced");
-    const stem = pyStem(vfile.name) || "inner";
-    const sliced = VFile.slice(`${stem}.sparse`, vfile.asSource(), offset, vfile.size - offset);
+    const sliced = VFile.slice(`${stem}.${suffix}`, source, offset, vfile.size - offset);
     workdir.addFile(sliced.name, sliced);
     await unwrap(sliced, ctx, depth + 1);
+  };
+  const sparse = await scanForSparse(source, vfile.size);
+  if (sparse.length) {
+    for (const offset of sparse) await slice(offset, "sparse");
+    return;
   }
+  // Stop at the first valid FAT boot sector: the Motorola wrapper puts the
+  // modem payload first and scanning the rest of a 400 MB filesystem for more
+  // false positives only costs time.
+  for (const offset of await scanForFat16(source, vfile.size, 1)) await slice(offset, "fat");
 }
 
 // Exported for the header-sniffing unit test: headOf must use vfile.readRange

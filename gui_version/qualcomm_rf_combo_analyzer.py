@@ -40,7 +40,7 @@ import new_rfcard_parser as modern
 # the legacy implementation directly.
 ParseError = legacy.ParseError
 
-VERSION = "1.9.0"
+VERSION = "1.9.2"
 MODERN_RE = re.compile(
     r"^rf_config_(?P<hwid>\d+)_(?P<fsid>\d+)_(?P<bid>\d+)"
     r"(?:_(?P<rev>\d+))?\.mbn$",

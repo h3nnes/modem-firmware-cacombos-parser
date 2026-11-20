@@ -49,7 +49,9 @@ function fatOem(head) {
   return String.fromCharCode(...head.slice(3, end));
 }
 
-const FAT_OEMS = new Set(["MSDOS5.0", "MSWIN4.1", "mkfs.fat", "FAT     ", "MSDOS"]);
+// FAT12/16 OEM names at offset 3, after trimming trailing NUL/space padding
+// (so the literal "FAT     " form normalizes to "FAT" and never matches).
+export const FAT_OEMS = new Set(["MSDOS5.0", "MSWIN4.1", "mkfs.fat", "MSDOS"]);
 
 // detect(path): head is the first MAGIC_MAX bytes (empty head -> "empty").
 export function detect(head, name = "") {
