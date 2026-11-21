@@ -14,7 +14,7 @@ import { TABLE_DISPLAY, ToolError } from "./legacy_parser.js";
 
 export { ToolError };
 
-const VERSION = "1.9.3";
+const VERSION = "1.9.4";
 
 // Doubles round every integer past 2**53. Varints that large stay exact as
 // BigInt, everything at or below Number.MAX_SAFE_INTEGER stays a plain
@@ -1016,18 +1016,28 @@ const SECTION_SPECS = [
   ["nr5g_nr5g", "nrdc", 5],
 ];
 
-export function parseModernModule(record, blob) {
+// Resolve the single res DAT carried by `blob`. Normally it is an embedded
+// /rfc/*_res.dat inside an RF MBN; a standalone res DAT import (the record name
+// itself ends in *_res.dat) is the payload rather than a wrapper. Embedded
+// members always win, so a renamed MBN still parses as an MBN.
+function resDatItem(record, blob) {
   const dats = extractRfcDats(blob);
   // Full case-folded endswith("_res.dat") check (e.g. "x_reſ.dat" matches);
   // toLowerCase leaves U+017F untouched.
   const resItems = dats
     .filter((d) => pyCasefold(d.name).endsWith("_res.dat"))
     .map((d) => [d.name, d.data]);
-  if (resItems.length === 0) throw new ToolError("No embedded /rfc/*_res.dat was found");
   if (resItems.length > 1) {
     throw new ToolError("More than one *_res.dat was found: " + resItems.map(([name]) => name).join(", "));
   }
-  const [datName, resDat] = resItems[0];
+  if (resItems.length === 1) return resItems[0];
+  const name = record?.name ?? "";
+  if (pyCasefold(name).endsWith("_res.dat")) return [name, blob];
+  throw new ToolError("No embedded /rfc/*_res.dat was found");
+}
+
+export function parseModernModule(record, blob) {
+  const [datName, resDat] = resDatItem(record, blob);
   const { encoding, payload, rrc } = parseResDat(resDat);
   const cardInfo = readRfcardInfo(datName, record.name, rrc);
 
@@ -1088,19 +1098,12 @@ export function parseModernModule(record, blob) {
 // one combinations row per raw/section record with no filtering (verified
 // against the full parse by the parity test and the golden corpus).
 export function countModernCombos(record, blob) {
-  const dats = extractRfcDats(blob);
-  const resItems = dats
-    .filter((d) => pyCasefold(d.name).endsWith("_res.dat"))
-    .map((d) => [d.name, d.data]);
-  if (resItems.length === 0) throw new ToolError("No embedded /rfc/*_res.dat was found");
-  if (resItems.length > 1) {
-    throw new ToolError("More than one *_res.dat was found: " + resItems.map(([name]) => name).join(", "));
-  }
-  const { rrc } = parseResDat(resItems[0][1]);
+  const resItem = resDatItem(record, blob);
+  const { rrc } = parseResDat(resItem[1]);
   // Throw parity with parseModernModule: identical arguments, identical error
   // propagation at the same point of the pipeline. The result (rfcard
   // metadata) is discarded — the count path skips metadata, not this call.
-  readRfcardInfo(resItems[0][0], record.name, rrc);
+  readRfcardInfo(resItem[0], record.name, rrc);
   const counts = {};
   for (const suffix of ["high", "low"]) {
     const field = `lte_info_per_band_sub_cap_${suffix}`;

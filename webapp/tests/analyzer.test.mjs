@@ -88,14 +88,18 @@ function framedItem(path, data) {
   return out;
 }
 
-function makeModernBlob() {
+function makeResDat() {
   const payload = new TextEncoder().encode("\x3a\x04\x0a\x02te");
   const stream = zlibSync(payload);
   const resDat = new Uint8Array(5 + 4 + stream.length);
   resDat.fill(0x22, 0, 5);
   new DataView(resDat.buffer).setUint32(5, payload.length, true);
   resDat.set(stream, 9);
-  return framedItem("/rfc/modem_rfcard_res.dat", resDat);
+  return resDat;
+}
+
+function makeModernBlob() {
+  return framedItem("/rfc/modem_rfcard_res.dat", makeResDat());
 }
 
 const MODERN_BLOB = makeModernBlob();
@@ -341,6 +345,27 @@ test("scanSource direct path handles the optional _rev segment and hex legacy to
   // "a" is alphabetic -> Python int(token, 16)
   assert.deepEqual([legacy.records[0].hwid, legacy.records[0].fsid], [6, 10]);
   assert.deepEqual([legacy.records[0].lte_combos, legacy.records[0].nr_combos], [-1, "—"]);
+});
+
+test("scanSource direct standalone res DAT path uses the file name for identity", async () => {
+  const dat = makeResDat();
+  const src = new BrowserFileSource(new Blob([dat]));
+  const result = await scanSource(src, "1316_0_res.dat");
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.records.length, 1);
+  const record = result.records[0];
+  assert.equal(record.generation, "DAT/protobuf");
+  assert.equal(record.name, "1316_0_res.dat");
+  assert.equal(record.inner_path, "1316_0_res.dat");
+  assert.equal(record.external, true);
+  assert.equal(record.size, dat.length);
+  assert.equal(record.sha256, sha256Hex(dat));
+  assert.deepEqual([record.hwid, record.fsid, record.bid], [1316, 0, 0]);
+  assert.equal(recordJson(record).identity, "1316_0_res");
+  assert.deepEqual([record.lte_combos, record.nr_combos], [0, "0+0+0=0"]);
+  // A same-named file is not mistaken for a candidate when it is not a res DAT.
+  const notRes = await scanSource(new BrowserFileSource(new Blob([dat])), "1316_0_cmn.dat");
+  assert.deepEqual(notRes.records, []);
 });
 
 test("scanSource returns a structured warning result for non-FAT16 input", async () => {

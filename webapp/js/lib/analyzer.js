@@ -94,12 +94,19 @@ const dictGet = (obj, key, fallback) => (hasOwn(obj, key) ? obj[key] : fallback)
 // --- name classification ------------------------------------------------------
 
 const MODERN_NAME_RE = /^rf_config_(?<hwid>\p{Nd}+)_(?<fsid>\p{Nd}+)_(?<bid>\p{Nd}+)(?:_(?<rev>\p{Nd}+))?\.mbn$/iu;
+// A standalone RFPD res DAT imported on its own ("1316_0_res.dat"): the same
+// protobuf payload an MBN carries, without the MBN wrapper. Only the file name
+// supplies identity, so there is no BID.
+const RES_DAT_NAME_RE = /^(?<hwid>\p{Nd}+)_(?<fsid>\p{Nd}+)_res\.dat$/iu;
 const LEGACY_NAME_RE = /^(?<hwid>[0-9A-F]+)_(?<fsid>[0-9A-F]+)(?:_(?<bid>[0-9A-F]+))?\.mbn$/iu;
 
-// Modern first, then legacy; named groups carry the IDs.
+// Modern first, then a standalone res DAT, then legacy; named groups carry
+// the IDs.
 export function matchesCandidate(name) {
   const folded = pyRegexFold(name);
   let match = MODERN_NAME_RE.exec(folded);
+  if (match) return { generation: "DAT/protobuf", match };
+  match = RES_DAT_NAME_RE.exec(folded);
   if (match) return { generation: "DAT/protobuf", match };
   match = LEGACY_NAME_RE.exec(folded);
   if (match) return { generation: "Legacy ELF", match };

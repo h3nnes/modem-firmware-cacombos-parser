@@ -39,6 +39,7 @@ import {
   enumAssignments,
   reverseEnum,
   parseModernModule,
+  countModernCombos,
   readRfcardInfo,
   b0cdV41Packets,
   b826V22Packets,
@@ -644,6 +645,35 @@ test("parseModernModule accepts res names only Python casefold() matches", () =>
   assert.equal(lig.metadata.res_dat_path, "/rfc/x_ﬁ_res.dat");
   // Without a casefold match the Python ToolError is raised.
   assert.throws(() => parseModernModule(record, framedItem("/rfc/x_reſ2.dat", makeResDat())), ToolError);
+});
+
+test("parseModernModule reads a standalone *_res.dat import directly", () => {
+  const dat = makeResDat();
+  const record = { name: "1316_0_res.dat", inner_path: "1316_0_res.dat" };
+  const out = parseModernModule(record, dat);
+  assert.equal(out.metadata.res_dat_path, "1316_0_res.dat");
+  assert.equal(out.metadata.res_dat_sha256, sha256Hex(dat));
+  assert.equal(out.metadata.dat_encoding, "4-byte-metadata+hash+size+zlib");
+  assert.equal(out.metadata.protobuf_size, 6);
+  assert.equal(out.metadata.rfcard.hwid, 1316);
+  assert.equal(out.metadata.rfcard.fsid, 0);
+  assert.equal(out.metadata.rfcard.bid, null);
+  assert.equal(out.metadata.rfcard.key, "1316_0");
+  // Count-only fast path takes the same standalone branch.
+  assert.deepEqual(countModernCombos(record, dat), {});
+});
+
+test("standalone res DAT names never shadow embedded MBN members", () => {
+  // The record claims to be a standalone DAT, but the blob is an MBN wrapper:
+  // the embedded member must win over treating the whole blob as a res DAT.
+  const blob = framedItem("/rfc/embedded_res.dat", makeResDat());
+  const out = parseModernModule({ name: "1316_0_res.dat" }, blob);
+  assert.equal(out.metadata.res_dat_path, "/rfc/embedded_res.dat");
+  // A record whose name is not *_res.dat still rejects an unwrapped body.
+  assert.throws(
+    () => parseModernModule({ name: "rf_config_1_2_3.mbn" }, makeResDat()),
+    /No embedded \/rfc\/\*_res\.dat was found/,
+  );
 });
 
 test("module_sha256 reuses record.sha256 when present, hashes only as fallback", () => {

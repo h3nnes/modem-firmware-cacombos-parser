@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.9.4 - 2026-11-21
+
+### Webapp
+
+- Accept a standalone RFPD `*_res.dat` (e.g. `1316_0_res.dat`) as an input.
+  Previously only `rf_config_*_*.mbn` files were candidates, and a bare res DAT
+  fell through to container extraction with no records. The scanner now treats
+  `<HWID>_<FSID>_res.dat` as a DAT/protobuf card, and the modern parser reads
+  the file body directly when no embedded `/rfc/*_res.dat` member is present.
+  The card's identity comes from the file name (`1316_0_res`); an MBN's BID has
+  no standalone equivalent.
+- Add `.dat` to the import file-type filter.
+- Bump the webapp reporter version to 1.9.4.
+
 ## 1.9.3 - 2026-11-20
 
 ### Webapp
