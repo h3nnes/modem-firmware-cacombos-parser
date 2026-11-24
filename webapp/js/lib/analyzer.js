@@ -21,7 +21,7 @@ import {
   parseLegacyModule,
   ToolError,
 } from "./legacy_parser.js";
-import { parseModernModule, countModernCombos, pyCasefold, pyNdInt, pyRegexFold } from "./modern_parser.js";
+import { parseModernModule, countModernCombos, parseResDat, resDatFraming, pyCasefold, pyNdInt, pyRegexFold } from "./modern_parser.js";
 import { scanMtk } from "./mtk_scan.js";
 
 export { ToolError };
@@ -427,6 +427,27 @@ function defaultInspectAppleBank(stream, uncompSize) {
   };
 }
 
+// A res DAT renamed away from "<HWID>_<FSID>_res.dat" still carries the RFPD
+// framing: metadata/hash bytes, a uint32 LE inflated size, then zlib. Probe a
+// small head slice, then validate the protobuf before emitting a record. The
+// caps keep a large firmware image from being read or inflated just because a
+// handful of header bytes happened to line up.
+const RES_DAT_PROBE_MAX_FILE = 32 * 1024 * 1024;
+const RES_DAT_PROBE_MAX_RAW = 64 * 1024 * 1024;
+
+async function probeStandaloneResDat(source) {
+  if (source.size < 12 || source.size > RES_DAT_PROBE_MAX_FILE) return null;
+  const framing = resDatFraming(await source.read(0, Math.min(64, source.size)));
+  if (!framing || framing.size > RES_DAT_PROBE_MAX_RAW) return null;
+  const blob = await source.read(0, source.size);
+  try {
+    parseResDat(blob);
+  } catch {
+    return null; // framing coincidence, not a res DAT
+  }
+  return blob;
+}
+
 export async function scanSource(source, name, { shouldCancel, inspectAppleBankAsync, onAppleBatch, onScanProgress, onCandidate, onAppleMember, onMtkImage } = {}) {
   const cancelled = shouldCancel ?? (() => false);
   const reportProgress = onScanProgress ?? (() => {});
@@ -458,6 +479,38 @@ export async function scanSource(source, name, { shouldCancel, inspectAppleBankA
     // Step 3: expose the exact bytes that were hashed so the worker can seed
     // its per-source blob memo and skip re-reading on the first card open.
     onCandidate?.(record, blob);
+    return { records: deduplicateRecords([record]), warnings: [] };
+  }
+
+  // Renamed standalone res DAT: the file name no longer carries the card
+  // identity, so classify the payload by content instead. The probe validates
+  // the protobuf before a record is emitted; a near-miss stays a normal
+  // "unsupported input" warning.
+  const resDatBlob = await probeStandaloneResDat(source);
+  if (cancelled()) throw new ScanCancelled();
+  if (resDatBlob) {
+    const size = source.size;
+    const digest = await sha256HexAsync(resDatBlob);
+    const base = {
+      inner_path: name,
+      name,
+      generation: "DAT/protobuf",
+      size,
+      hwid: 0,
+      fsid: 0,
+      bid: 0,
+      external: true,
+      source_path: "",
+      sidecars: {},
+      sha256: digest,
+      // The name does not identify a standalone DAT; parseModernModule's
+      // resDatItem() uses this to read the blob directly.
+      standalone_res_dat: true,
+    };
+    const [lte, nr] = comboCounts(base, resDatBlob);
+    const record = buildRecord(base, lte, nr);
+    record.standalone_res_dat = true;
+    onCandidate?.(record, resDatBlob);
     return { records: deduplicateRecords([record]), warnings: [] };
   }
 

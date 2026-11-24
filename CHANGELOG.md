@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.9.5 - 2026-11-24
+
+### Webapp
+
+- Parse a standalone res DAT whose file name was changed (for example
+  `1316_0_res.dat` → `payload.bin`, `renamed.dat`, or an extension-less name).
+  The scanner probes the RFPD framing (metadata/hash + uint32 size + zlib) on
+  small direct inputs and validates the protobuf before adding a card, and the
+  parser treats the blob itself as the res DAT when no embedded member exists.
+  Identity still comes from the file name; a renamed payload has no HWID/FSID.
+- Bump the webapp reporter version to 1.9.5.
+
 ## 1.9.4 - 2026-11-21
 
 ### Webapp

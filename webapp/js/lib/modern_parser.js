@@ -14,7 +14,7 @@ import { TABLE_DISPLAY, ToolError } from "./legacy_parser.js";
 
 export { ToolError };
 
-const VERSION = "1.9.4";
+const VERSION = "1.9.5";
 
 // Doubles round every integer past 2**53. Varints that large stay exact as
 // BigInt, everything at or below Number.MAX_SAFE_INTEGER stays a plain
@@ -205,6 +205,26 @@ export function reverseEnum(enumMap, prefix) {
     }
   }
   return out;
+}
+
+// Cheap probe for the standard RFPD DAT framing: 0..32 metadata/hash bytes,
+// a uint32 LE inflated size, then a zlib stream. A standalone res DAT keeps
+// this framing after its file name is changed, so the scanner checks a small
+// head slice before committing to reading/inflating the whole input.
+export function resDatFraming(head) {
+  const limit = Math.min(32, Math.max(0, head.length - 6));
+  const r = new StructReader(head);
+  for (let base = 0; base < limit; base++) {
+    const expected = r.u32(base + 1);
+    if (expected === 0) continue;
+    const cmf = head[base + 5];
+    const flg = head[base + 6];
+    // zlib: deflate method, window <= 32K, header checksum, no preset dict.
+    if ((cmf & 15) === 8 && (cmf >> 4) <= 7 && ((cmf << 8) | flg) % 31 === 0 && !((flg >> 5) & 1)) {
+      return { base, size: expected };
+    }
+  }
+  return null;
 }
 
 export function datPayloadCandidates(dat) {
@@ -1031,9 +1051,23 @@ function resDatItem(record, blob) {
     throw new ToolError("More than one *_res.dat was found: " + resItems.map(([name]) => name).join(", "));
   }
   if (resItems.length === 1) return resItems[0];
+  // DAT members exist but none is a res DAT: this is a wrapper with the wrong
+  // member set, not a standalone payload. Keep the original error.
+  if (dats.length > 0) throw new ToolError("No embedded /rfc/*_res.dat was found");
   const name = record?.name ?? "";
-  if (pyCasefold(name).endsWith("_res.dat")) return [name, blob];
-  throw new ToolError("No embedded /rfc/*_res.dat was found");
+  // A renamed standalone DAT is classified by content at scan time and
+  // carries the flag; the name check keeps direct parseModernModule calls
+  // (tests, API users) working without the flag.
+  if (record?.standalone_res_dat || pyCasefold(name).endsWith("_res.dat")) return [name, blob];
+  // Any other rename (extension-less, .bin, even MBN-looking) still parses by
+  // content. parseResDat's framing + rrc validation makes this safe: a wrapper
+  // without a valid res DAT is rejected with the original error.
+  try {
+    parseResDat(blob);
+  } catch {
+    throw new ToolError("No embedded /rfc/*_res.dat was found");
+  }
+  return [name, blob];
 }
 
 export function parseModernModule(record, blob) {

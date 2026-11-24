@@ -142,6 +142,29 @@ test("worker: scan artifacts mean two exports of one sourceId never re-extract",
   assert.equal(workerModule.getDebugCounters().parseModule, parseBefore, "a pure mbn export must never parse");
 });
 
+test("worker: a renamed standalone res DAT scans and opens", async () => {
+  const { zlibSync } = await import("../lib/vendor/fflate.js");
+  const payload = new TextEncoder().encode("\x3a\x04\x0a\x02te");
+  const stream = zlibSync(payload);
+  const dat = new Uint8Array(5 + 4 + stream.length);
+  dat.fill(0x22, 0, 5);
+  new DataView(dat.buffer).setUint32(5, payload.length, true);
+  dat.set(stream, 9);
+
+  const sourceId = 350;
+  const scan = await request(
+    { type: "scan", id: 6, files: [{ sourceId, file: new File([dat], "renamed_payload.bin") }] },
+    (m) => m.type === "records" && m.fileIndex === 0,
+  );
+  assert.equal(scan.records.length, 1);
+  const record = scan.records[0];
+  assert.equal(record.standalone_res_dat, true);
+  assert.equal(record.name, "renamed_payload.bin");
+  const reply = await request({ type: "parseCard", id: 61, sourceId, fileIndex: 0, record }, (m) => m.id === 61);
+  assert.equal(reply.recordName, "renamed_payload.bin");
+  assert.ok(isValidTablesShape(reply.tables));
+});
+
 test("worker: an unknown sourceId errors with the request id instead of reading", async () => {
   const reply = await request(
     { type: "parseCard", id: 77, sourceId: 987654, fileIndex: 0, record: { name: "missing.mbn" } },

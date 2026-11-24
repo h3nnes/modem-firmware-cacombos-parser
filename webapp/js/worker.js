@@ -426,7 +426,7 @@ function extractContainerMemoized(sourceId, source, fallbackName) {
 // re-extraction, in that order. `file` supplies the display label for
 // container extraction; bytes always come from `source`.
 async function readRecordBlob(sourceId, file, source, record) {
-  if (record.external && record.inner_path === record.name && matchesCandidate(record.name)) {
+  if (record.external && record.inner_path === record.name && (matchesCandidate(record.name) || record.standalone_res_dat)) {
     return source.read(0, source.size);
   }
   const fat = await fatFor(sourceId, source);

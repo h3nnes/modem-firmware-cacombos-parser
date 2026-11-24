@@ -669,11 +669,30 @@ test("standalone res DAT names never shadow embedded MBN members", () => {
   const blob = framedItem("/rfc/embedded_res.dat", makeResDat());
   const out = parseModernModule({ name: "1316_0_res.dat" }, blob);
   assert.equal(out.metadata.res_dat_path, "/rfc/embedded_res.dat");
-  // A record whose name is not *_res.dat still rejects an unwrapped body.
+  // A non-DAT body under an MBN name is still rejected.
   assert.throws(
-    () => parseModernModule({ name: "rf_config_1_2_3.mbn" }, makeResDat()),
+    () => parseModernModule({ name: "rf_config_1_2_3.mbn" }, Uint8Array.of(0x08, 0x01)),
     /No embedded \/rfc\/\*_res\.dat was found/,
   );
+});
+
+test("a renamed standalone res DAT parses by content or with the scan flag", () => {
+  const dat = makeResDat();
+  for (const record of [
+    { name: "renamed-payload.bin", standalone_res_dat: true },
+    { name: "renamed-payload.bin" },
+    { name: "rf_config_999_0_0.mbn" }, // even an MBN-looking rename
+  ]) {
+    const out = parseModernModule(record, dat);
+    assert.equal(out.metadata.res_dat_path, record.name);
+    assert.deepEqual(countModernCombos(record, dat), {});
+  }
+  const renamed = parseModernModule({ name: "renamed-payload.bin" }, dat);
+  // No file-name identity: the payload alone cannot supply HWID/FSID.
+  assert.equal(renamed.metadata.rfcard.hwid, null);
+  assert.equal(renamed.metadata.rfcard.fsid, null);
+  assert.equal(renamed.metadata.rfcard.bid, null);
+  assert.equal(renamed.metadata.rfcard.key, null);
 });
 
 test("module_sha256 reuses record.sha256 when present, hashes only as fallback", () => {

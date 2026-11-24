@@ -363,9 +363,38 @@ test("scanSource direct standalone res DAT path uses the file name for identity"
   assert.deepEqual([record.hwid, record.fsid, record.bid], [1316, 0, 0]);
   assert.equal(recordJson(record).identity, "1316_0_res");
   assert.deepEqual([record.lte_combos, record.nr_combos], [0, "0+0+0=0"]);
-  // A same-named file is not mistaken for a candidate when it is not a res DAT.
-  const notRes = await scanSource(new BrowserFileSource(new Blob([dat])), "1316_0_cmn.dat");
-  assert.deepEqual(notRes.records, []);
+});
+
+test("scanSource recognizes a renamed standalone res DAT by content", async () => {
+  const dat = makeResDat();
+  for (const name of ["renamed-payload.bin", "no-extension"]) {
+    const result = await scanSource(new BrowserFileSource(new Blob([dat])), name);
+    assert.deepEqual(result.warnings, []);
+    assert.equal(result.records.length, 1);
+    assert.deepEqual(result.records[0], {
+      inner_path: name,
+      name,
+      generation: "DAT/protobuf",
+      size: dat.length,
+      hwid: 0,
+      fsid: 0,
+      bid: 0,
+      external: true,
+      source_path: "",
+      sidecars: {},
+      sha256: sha256Hex(dat),
+      lte_combos: 0,
+      nr_combos: "0+0+0=0",
+      standalone_res_dat: true,
+    });
+    // The flagged record opens the blob as the res DAT itself.
+    assert.equal(parseModule(result.records[0], dat).metadata.res_dat_path, name);
+  }
+  // A framing near-miss is not promoted to a card.
+  const broken = dat.slice();
+  new DataView(broken.buffer).setUint32(5, 999, true);
+  const nearMiss = await scanSource(new BrowserFileSource(new Blob([broken])), "renamed.bin");
+  assert.deepEqual(nearMiss.records, []);
 });
 
 test("scanSource returns a structured warning result for non-FAT16 input", async () => {
