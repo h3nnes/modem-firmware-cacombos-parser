@@ -57,7 +57,7 @@ export const TABLE_DISPLAY = {
   nr_unknown: "NR-only (unclassified)",
 };
 
-const VERSION = "1.9.5";
+const VERSION = "1.9.6";
 
 // B826 source enum per table.
 const B826_SOURCE = { endc: 3, nr_ca: 4, nrdc: 5 };
@@ -535,7 +535,7 @@ export function validateCandidate(data, image, descriptorOffset, { exhaustive })
           HI_INLINE_COMBO_RECORD_SIZE,
           HI_INLINE_BAND_GROUP_RECORD_SIZE,
           "hi_inline_100",
-          "compact_8",
+          "hi_inline_8",
           antennaTableVa,
         ];
       }
@@ -1030,35 +1030,53 @@ export function parseBandGroup(data, descriptor, index) {
   const dlBwClassCode = bandCode >> 11;
   const dlBwClass = bandwidthClassLabel(dlBwClassCode);
 
-  const dlBwCode = words[1] & 0x3f;
-
   const layout = descriptor.bandGroupLayout;
+  let dlBwCode;
   let ulBwClassCode;
+  let ulBwCode;
   let ulPresent;
   let field2UnknownHigh;
   let dlAntennaIndex;
   let ulAntennaIndex;
-  if (layout === "native_aligned_12") {
+  if (layout === "hi_inline_8") {
+    // MPSS.HI inline combo component (8 bytes). Unlike the 12-byte band
+    // groups, word1 packs a 5-bit DL bandwidth code, a 5-bit UL bandwidth
+    // class and a 6-bit UL bandwidth code; word2 carries a 7-bit DL antenna
+    // index and a 7-bit UL antenna index (its top two bits carry a nonzero
+    // field in SDI data).
+    dlBwCode = words[1] & 0x1f;
+    ulBwClassCode = (words[1] >> 5) & 0x1f;
+    ulBwCode = (words[1] >> 10) & 0x3f;
+    ulPresent = ulBwClassCode !== 0;
+    field2UnknownHigh = words[2] >> 14;
+    dlAntennaIndex = words[2] & 0x7f;
+    ulAntennaIndex = (words[2] >> 7) & 0x7f;
+  } else if (layout === "native_aligned_12") {
+    dlBwCode = words[1] & 0x3f;
     ulBwClassCode = (words[1] >> 7) & 0x1f;
     ulPresent = ulBwClassCode !== 0;
     field2UnknownHigh = words[1] >> 12;
     dlAntennaIndex = (words[2] >> 7) & 0x7f;
     ulAntennaIndex = ((words[2] >> 14) & 0x03) | ((words[3] & 0x1f) << 2);
+    ulBwCode = words[2] & 0x3f;
   } else if (layout === "later_generated_12") {
+    dlBwCode = words[1] & 0x3f;
     ulBwClassCode = (words[1] >> 6) & 0x1f;
     ulPresent = ulBwClassCode !== 0;
     field2UnknownHigh = words[1] >> 11;
     dlAntennaIndex = (words[2] >> 6) & 0x7f;
     ulAntennaIndex = ((words[2] >> 13) & 0x07) | ((words[3] & 0x0f) << 3);
+    ulBwCode = words[2] & 0x3f;
   } else {
+    dlBwCode = words[1] & 0x3f;
     ulPresent = ((words[1] >> 6) & 1) !== 0;
     ulBwClassCode = ulPresent ? 1 : 0;
     field2UnknownHigh = words[1] >> 7;
     dlAntennaIndex = (words[2] >> 6) & 0x7f;
     ulAntennaIndex = (words[2] >> 13) & 0x07;
+    ulBwCode = words[2] & 0x3f;
   }
 
-  const ulBwCode = words[2] & 0x3f;
   const [dlPattern, dlAntennaName] = antennaInfo(dlAntennaIndex);
   const [ulPattern, ulAntennaName] = antennaInfo(ulAntennaIndex);
 

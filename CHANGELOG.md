@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.9.6 - 2026-11-28
+
+### Webapp
+
+- Decode MPSS.HI inline (`hi_inline_100`) RF combo components correctly. The
+  8-byte inline records pack a 5-bit DL bandwidth code, a 5-bit UL bandwidth
+  class and a 6-bit UL bandwidth code in word 1, plus 7-bit DL and UL antenna
+  indexes in word 2. The previous compact-8 decode read a 6-bit DL code and
+  shifted the antenna fields, so Snapdragon Insider cards showed multi-part
+  bandwidths for single-carrier bands (for example `20+10` instead of `100`)
+  and doubled MIMO patterns (`1 + 1 + 1` instead of `4 + 4`). Affected cards
+  now report the correct single-carrier bandwidths, MIMO patterns and UL
+  composition.
+- Bump the webapp reporter version to 1.9.6.
+
 ## 1.9.5 - 2026-11-24
 
 ### Webapp

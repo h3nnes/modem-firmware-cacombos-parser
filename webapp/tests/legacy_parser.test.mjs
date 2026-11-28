@@ -56,6 +56,21 @@ function component(rat, band, dlClass = 1) {
   return out;
 }
 
+// MPSS.HI inline component: 5-bit DL BW, 5-bit UL class, 6-bit UL BW in
+// word1; 7-bit DL and UL antenna indexes in word2.
+function hiComponent(rat, band, { dlClass = 1, dlBw = 0, ulClass = 0, ulBw = 0, dlAnt = 0, ulAnt = 0, unknown = 0, feature = 0 } = {}) {
+  const bandCode = rat | (band << 2) | (dlClass << 11);
+  const word1 = (dlBw & 0x1f) | ((ulClass & 0x1f) << 5) | ((ulBw & 0x3f) << 10);
+  const word2 = (dlAnt & 0x7f) | ((ulAnt & 0x7f) << 7) | ((unknown & 0x03) << 14);
+  const out = new Uint8Array(8);
+  const dv = new DataView(out.buffer);
+  dv.setUint16(0, bandCode, true);
+  dv.setUint16(2, word1, true);
+  dv.setUint16(4, word2, true);
+  dv.setUint16(6, feature, true);
+  return out;
+}
+
 function inlineFixture(combos) {
   const data = new Uint8Array(FlatImage.RECORDS_OFFSET + combos.length * 100);
   const dv = new DataView(data.buffer);
@@ -69,8 +84,8 @@ function inlineFixture(combos) {
   dv.setUint32(20, 0, true);
   combos.forEach((entries, comboIndex) => {
     const offset = FlatImage.RECORDS_OFFSET + comboIndex * 100;
-    entries.forEach(([rat, band], position) => {
-      data.set(component(rat, band), offset + position * 8);
+    entries.forEach((entry, position) => {
+      data.set(entry instanceof Uint8Array ? entry : component(entry[0], entry[1]), offset + position * 8);
     });
     data[offset + 96] = 2;
     data[offset + 98] = entries.length;
@@ -100,6 +115,94 @@ test("nr_ca inline descriptor and combos", () => {
   );
   assert.equal(parsed.combinations[0].num_band_entries, 2);
   assert.equal(parsed.descriptor.descriptor_layout, "hi_inline_100");
+});
+
+test("hi_inline components decode the 5/5/6-bit bandwidth and 7-bit antenna fields", () => {
+  const n79 = hiComponent(2, 79, { dlBw: 21, ulClass: 1, ulBw: 21, dlAnt: 3, ulAnt: 1, feature: 0x0c });
+  const n41 = hiComponent(2, 41, { dlBw: 4, dlAnt: 2, feature: 0x08 });
+  const data = inlineFixture([[n79, n41]]);
+  const image = new FlatImage(data);
+
+  const layout = validateCandidate(data, image, 0, { exhaustive: true });
+  assert.notEqual(layout, null);
+  assert.equal(layout[8], "hi_inline_100");
+  assert.equal(layout[9], "hi_inline_8");
+
+  const descriptor = makeDescriptor(data, image, 0, layout);
+  const parsed = parseDescriptor("660_0_0.mbn", data, descriptor, {
+    discovery: "unit test",
+    tableKind: "nrca",
+    detectedTableCount: 1,
+  });
+  assert.equal(parsed.descriptor.band_group_layout, "hi_inline_8");
+  const [first, second] = parsed.combinations[0].entries;
+  assert.equal(first.dl_bw_code, 21);
+  assert.equal(first.dl_bandwidth, "100 MHz");
+  assert.equal(first.dl_bw_class, "A");
+  assert.equal(first.ul_present, true);
+  assert.equal(first.ul_bw_class, "A");
+  assert.equal(first.ul_bw_code, 21);
+  assert.equal(first.ul_bandwidth, "100 MHz");
+  assert.equal(first.dl_antenna, "ANTENNA_4");
+  assert.equal(first.ul_antenna, "ANTENNA_1");
+  assert.equal(second.dl_bw_code, 4);
+  assert.equal(second.dl_bandwidth, "20 MHz");
+  assert.equal(second.ul_present, false);
+  assert.equal(second.ul_bw_class, "NONE");
+  assert.equal(second.ul_bw_code, 0);
+  assert.equal(second.dl_antenna, "ANTENNA_2");
+  assert.equal(second.ul_antenna, "NONE");
+});
+
+test("hi_inline_8 decodes multi-carrier classes and the word2 unknown field", () => {
+  const n79 = hiComponent(2, 79, { dlClass: 3, dlBw: 5, ulClass: 3, ulBw: 5, dlAnt: 8, ulAnt: 4, unknown: 2 });
+  const data = inlineFixture([[n79]]);
+  const image = new FlatImage(data);
+  const parsed = parseDescriptor("660_0_0.mbn", data, makeDescriptor(data, image, 0), {
+    discovery: "unit test",
+    tableKind: "nrca",
+    detectedTableCount: 1,
+  });
+  const entry = parsed.combinations[0].entries[0];
+  assert.equal(entry.dl_bw_class, "C");
+  assert.equal(entry.dl_bandwidth, "20 MHz");
+  assert.equal(entry.dl_antenna, "ANTENNA_4_4");
+  assert.equal(entry.ul_bw_class, "C");
+  assert.equal(entry.ul_bandwidth, "20 MHz");
+  assert.equal(entry.ul_antenna, "ANTENNA_1_1");
+  assert.equal(entry.field_2_unknown_high, 2);
+});
+
+test("real SDI hi_inline component bytes decode single-carrier bandwidth and antennas", () => {
+  // n79 and n41 records lifted from SDI.bin's 660_0_0.mbn / 700_1_0.mbn.
+  const n79 = Uint8Array.from([0x3e, 0x09, 0x35, 0x54, 0x83, 0x80, 0x0c, 0x00]);
+  const n41 = Uint8Array.from([0xa6, 0x08, 0x15, 0x00, 0x03, 0x80, 0x08, 0x00]);
+  const data = inlineFixture([[n79, n41]]);
+  const image = new FlatImage(data);
+
+  const descriptor = makeDescriptor(data, image, 0);
+  const parsed = parseDescriptor("660_0_0.mbn", data, descriptor, {
+    discovery: "unit test",
+    tableKind: "nrca",
+    detectedTableCount: 1,
+  });
+  const [first, second] = parsed.combinations[0].entries;
+  assert.equal(first.band, 79);
+  assert.equal(first.dl_bw_class, "A");
+  assert.equal(first.dl_bw_code, 21);
+  assert.equal(first.dl_bandwidth, "100 MHz");
+  assert.equal(first.ul_present, true);
+  assert.equal(first.ul_bw_class, "A");
+  assert.equal(first.ul_bw_code, 21);
+  assert.equal(first.ul_bandwidth, "100 MHz");
+  assert.equal(first.dl_antenna, "ANTENNA_4");
+  assert.equal(first.ul_antenna, "ANTENNA_1");
+  assert.equal(second.band, 41);
+  assert.equal(second.dl_bw_code, 21);
+  assert.equal(second.dl_bandwidth, "100 MHz");
+  assert.equal(second.ul_present, false);
+  assert.equal(second.dl_antenna, "ANTENNA_4");
+  assert.equal(second.ul_antenna, "NONE");
 });
 
 test("endc inline descriptor", () => {
